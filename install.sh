@@ -1,0 +1,318 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+# This script is intentionally self-contained so it can be run directly from
+# GitHub with `curl ... | bash`.
+
+readonly NVM_VERSION="${NVM_VERSION:-v0.40.6}"
+readonly NVM_INSTALL_URL="https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh"
+readonly P10K_REPO="https://github.com/romkatv/powerlevel10k.git"
+readonly AUTOSUGGESTIONS_REPO="https://github.com/zsh-users/zsh-autosuggestions.git"
+readonly SYNTAX_HIGHLIGHTING_REPO="https://github.com/zsh-users/zsh-syntax-highlighting.git"
+readonly FONT_BASE_URL="https://github.com/romkatv/powerlevel10k-media/raw/master"
+readonly TARGET_USER="$(id -un)"
+readonly ZDOTDIR_PATH="${ZDOTDIR:-$HOME}"
+readonly ZSHRC="${ZDOTDIR_PATH}/.zshrc"
+readonly ZSH_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zsh"
+readonly ZSH_PLUGIN_DIR="${ZSH_DATA_DIR}/plugins"
+readonly P10K_DIR="${P10K_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/powerlevel10k}"
+readonly NVM_DIR_PATH="${NVM_DIR:-${XDG_CONFIG_HOME:-$HOME}/nvm}"
+readonly LINUX_FONT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/MesloLGS-NF"
+readonly ZSHRC_START="# >>> wsl-dev-setup >>>"
+readonly ZSHRC_END="# <<< wsl-dev-setup <<<"
+
+readonly -a FONT_FILES=(
+  "MesloLGS NF Regular.ttf"
+  "MesloLGS NF Bold.ttf"
+  "MesloLGS NF Italic.ttf"
+  "MesloLGS NF Bold Italic.ttf"
+)
+
+log() {
+  printf '\033[1;32m==>\033[0m %s\n' "$*"
+}
+
+warn() {
+  printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2
+}
+
+die() {
+  printf '\033[1;31merror:\033[0m %s\n' "$*" >&2
+  exit 1
+}
+
+on_error() {
+  local exit_code=$?
+  printf '\033[1;31merror:\033[0m setup failed near line %s (exit %s)\n' "$1" "$exit_code" >&2
+  exit "$exit_code"
+}
+
+trap 'on_error "$LINENO"' ERR
+
+require_ubuntu() {
+  [[ -r /etc/os-release ]] || die "This script needs an Ubuntu-based WSL distro."
+
+  # shellcheck disable=SC1091
+  source /etc/os-release
+  [[ "${ID:-}" == "ubuntu" ]] || die "This script targets Ubuntu; detected ${PRETTY_NAME:-an unknown distro}."
+}
+
+require_non_root() {
+  [[ "$EUID" -ne 0 ]] || die "Run this as your normal user, without sudo. The script uses sudo only for apt and the login shell."
+  command -v sudo >/dev/null 2>&1 || die "sudo is required. Install it first, then rerun this script."
+}
+
+install_apt_packages() {
+  local -a packages=(
+    ca-certificates
+    curl
+    fontconfig
+    git
+    zsh
+    build-essential
+    libssl-dev
+    pkg-config
+    python3
+    unzip
+    zip
+    xz-utils
+  )
+
+  if [[ "${INSTALL_EXTRA_TOOLS:-1}" == "1" ]]; then
+    packages+=(
+      bat
+      direnv
+      fd-find
+      fzf
+      jq
+      ripgrep
+      tree
+    )
+  fi
+
+  log "Installing Ubuntu packages"
+  sudo -v
+  sudo apt-get update
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
+}
+
+clone_if_missing() {
+  local repository=$1
+  local destination=$2
+
+  if [[ -d "${destination}/.git" ]]; then
+    log "Already installed: ${destination}"
+    return
+  fi
+
+  [[ ! -e "$destination" ]] || die "Refusing to replace an existing non-Git directory: ${destination}"
+
+  mkdir -p "$(dirname "$destination")"
+  log "Cloning $(basename "$destination")"
+  git clone --depth=1 --single-branch "$repository" "$destination"
+}
+
+install_zsh_plugins() {
+  clone_if_missing "$AUTOSUGGESTIONS_REPO" "${ZSH_PLUGIN_DIR}/zsh-autosuggestions"
+  clone_if_missing "$SYNTAX_HIGHLIGHTING_REPO" "${ZSH_PLUGIN_DIR}/zsh-syntax-highlighting"
+  clone_if_missing "$P10K_REPO" "$P10K_DIR"
+}
+
+install_nvm_and_node() {
+  mkdir -p "$NVM_DIR_PATH"
+
+  if [[ ! -s "${NVM_DIR_PATH}/nvm.sh" ]]; then
+    local installer profile_stub
+    installer="$(mktemp)"
+    profile_stub="$(mktemp)"
+
+    log "Installing nvm ${NVM_VERSION}"
+    curl --fail --location --retry 3 --retry-all-errors --connect-timeout 15 \
+      "$NVM_INSTALL_URL" --output "$installer"
+
+    # The official installer appends shell init lines to PROFILE. Use a
+    # temporary profile because this script owns the init block in .zshrc.
+    PROFILE="$profile_stub" NVM_DIR="$NVM_DIR_PATH" bash "$installer"
+    rm -f "$installer" "$profile_stub"
+  else
+    log "Already installed: nvm"
+  fi
+
+  export NVM_DIR="$NVM_DIR_PATH"
+  # shellcheck disable=SC1090
+  source "${NVM_DIR_PATH}/nvm.sh"
+
+  log "Installing the latest Node.js LTS"
+  nvm install --lts
+
+  local lts_version
+  lts_version="$(nvm version 'lts/*')"
+  [[ "$lts_version" != "N/A" && "$lts_version" != "none" ]] || die "nvm could not resolve the latest Node.js LTS version."
+
+  nvm alias default "$lts_version"
+  nvm use "$lts_version" >/dev/null
+}
+
+download_font() {
+  local font_name=$1
+  local encoded_name=${font_name// /%20}
+  local destination="${LINUX_FONT_DIR}/${font_name}"
+  local temporary_file
+
+  [[ -s "$destination" ]] && return
+
+  temporary_file="$(mktemp)"
+  if ! curl --fail --location --retry 3 --retry-all-errors --connect-timeout 15 \
+    "${FONT_BASE_URL}/${encoded_name}" --output "$temporary_file"; then
+    rm -f "$temporary_file"
+    die "Could not download ${font_name}."
+  fi
+  mv "$temporary_file" "$destination"
+}
+
+install_windows_font() {
+  local font_name=$1
+  local windows_path=$2
+  local font_path_quoted font_name_quoted powershell_command
+
+  font_path_quoted="$(printf '%s' "$windows_path" | sed "s/'/''/g" | sed "s/^/'/; s/$/'/")"
+  font_name_quoted="$(printf '%s' "$font_name" | sed "s/'/''/g" | sed "s/^/'/; s/$/'/")"
+  printf -v powershell_command '$ErrorActionPreference = "Stop"; $fontPath = %s; $fontName = %s; $fontDirectory = Join-Path $env:LOCALAPPDATA "Microsoft\Windows\Fonts"; $registryPath = "HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Fonts"; New-Item -ItemType Directory -Force -Path $fontDirectory | Out-Null; $targetPath = Join-Path $fontDirectory $fontName; Copy-Item -LiteralPath $fontPath -Destination $targetPath -Force; New-Item -Path $registryPath -Force | Out-Null; $registryName = "{0} (TrueType)" -f [IO.Path]::GetFileNameWithoutExtension($fontName); New-ItemProperty -Path $registryPath -Name $registryName -Value $targetPath -PropertyType String -Force | Out-Null' "$font_path_quoted" "$font_name_quoted"
+
+  if ! powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+    -Command "$powershell_command"; then
+    warn "Windows font registration failed for ${font_name}; install it manually if it does not appear in Windows Terminal."
+  fi
+}
+
+install_fonts() {
+  [[ "${SKIP_FONTS:-0}" == "1" ]] && { warn "Skipping Meslo Nerd Font installation (SKIP_FONTS=1)."; return; }
+
+  log "Installing MesloLGS NF fonts for Powerlevel10k"
+  mkdir -p "$LINUX_FONT_DIR"
+
+  local font_name
+  for font_name in "${FONT_FILES[@]}"; do
+    download_font "$font_name"
+  done
+
+  if command -v fc-cache >/dev/null 2>&1; then
+    fc-cache -f "$LINUX_FONT_DIR" >/dev/null 2>&1 || warn "Could not refresh the Linux font cache."
+  fi
+
+  if [[ -n "${WSL_INTEROP:-}" ]] || grep -qi microsoft /proc/version 2>/dev/null; then
+    if command -v powershell.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
+      for font_name in "${FONT_FILES[@]}"; do
+        install_windows_font "$font_name" "$(wslpath -w "${LINUX_FONT_DIR}/${font_name}")"
+      done
+      log "Registered MesloLGS NF in the Windows user font directory"
+    else
+      warn "WSL was detected, but powershell.exe or wslpath is unavailable; install MesloLGS NF on Windows manually."
+    fi
+  fi
+}
+
+quote_for_shell() {
+  printf '%q' "$1"
+}
+
+configure_zshrc() {
+  local nvm_dir_quoted p10k_dir_quoted plugin_dir_quoted zdotdir_quoted
+  local temporary_file
+
+  mkdir -p "$ZDOTDIR_PATH"
+  touch "$ZSHRC"
+
+  nvm_dir_quoted="$(quote_for_shell "$NVM_DIR_PATH")"
+  p10k_dir_quoted="$(quote_for_shell "$P10K_DIR")"
+  plugin_dir_quoted="$(quote_for_shell "$ZSH_PLUGIN_DIR")"
+  zdotdir_quoted="$(quote_for_shell "$ZDOTDIR_PATH")"
+
+  if ! grep -Fqx "$ZSHRC_START" "$ZSHRC" 2>/dev/null; then
+    cp -p "$ZSHRC" "${ZSHRC}.pre-wsl-dev-setup"
+  fi
+
+  temporary_file="$(mktemp "${ZSHRC}.tmp.XXXXXX")"
+  awk -v start="$ZSHRC_START" -v end="$ZSHRC_END" '
+    $0 == start { inside = 1; next }
+    $0 == end { inside = 0; next }
+    !inside { print }
+  ' "$ZSHRC" > "$temporary_file"
+
+  {
+    [[ ! -s "$temporary_file" ]] || printf '\n'
+    printf '%s\n' "$ZSHRC_START"
+    printf '%s\n' '# Managed by wsl-dev-setup. Rerunning the installer replaces only this block.'
+    printf 'export NVM_DIR=%s\n' "$nvm_dir_quoted"
+    printf '[[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"\n'
+    printf '\n'
+    printf '# Powerlevel10k\n'
+    printf 'if [[ -r %s/powerlevel10k.zsh-theme ]]; then\n' "$p10k_dir_quoted"
+    printf '  source %s/powerlevel10k.zsh-theme\n' "$p10k_dir_quoted"
+    printf 'fi\n'
+    printf '[[ ! -r %s/.p10k.zsh ]] || source %s/.p10k.zsh\n' "$zdotdir_quoted" "$zdotdir_quoted"
+    printf '\n'
+    printf '# Completion and useful Ubuntu developer tools\n'
+    printf 'autoload -Uz compinit && compinit\n'
+    printf '[[ -r /usr/share/doc/fzf/examples/key-bindings.zsh ]] && source /usr/share/doc/fzf/examples/key-bindings.zsh\n'
+    printf '[[ -r /usr/share/doc/fzf/examples/completion.zsh ]] && source /usr/share/doc/fzf/examples/completion.zsh\n'
+    printf 'if command -v direnv >/dev/null 2>&1; then eval "$(direnv hook zsh)"; fi\n'
+    printf 'if command -v fdfind >/dev/null 2>&1; then alias fd="fdfind"; fi\n'
+    printf 'if command -v batcat >/dev/null 2>&1; then alias bat="batcat"; fi\n'
+    printf '\n'
+    printf '# zsh-autosuggestions\n'
+    printf '[[ -r %s/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source %s/zsh-autosuggestions/zsh-autosuggestions.zsh\n' "$plugin_dir_quoted" "$plugin_dir_quoted"
+    printf '\n'
+    printf '# zsh-syntax-highlighting must be sourced last\n'
+    printf '[[ -r %s/zsh-syntax-highlighting.zsh ]] && source %s/zsh-syntax-highlighting.zsh\n' "$plugin_dir_quoted" "$plugin_dir_quoted"
+    printf '%s\n' "$ZSHRC_END"
+  } >> "$temporary_file"
+
+  if ! cmp -s "$temporary_file" "$ZSHRC"; then
+    mv "$temporary_file" "$ZSHRC"
+  else
+    rm -f "$temporary_file"
+  fi
+
+  log "Configured ${ZSHRC}"
+}
+
+set_default_shell() {
+  [[ "${SKIP_DEFAULT_SHELL:-0}" == "1" ]] && { warn "Leaving the default login shell unchanged (SKIP_DEFAULT_SHELL=1)."; return; }
+
+  local zsh_path current_shell
+  zsh_path="$(command -v zsh)"
+  current_shell="$(getent passwd "$TARGET_USER" | cut -d: -f7 || true)"
+
+  if [[ "$current_shell" == "$zsh_path" ]]; then
+    log "zsh is already the default login shell"
+    return
+  fi
+
+  if sudo usermod --shell "$zsh_path" "$TARGET_USER"; then
+    log "Set zsh as the default login shell for ${TARGET_USER}"
+  else
+    warn "Could not set zsh as the default login shell; run: sudo usermod --shell ${zsh_path} ${TARGET_USER}"
+  fi
+}
+
+main() {
+  require_non_root
+  require_ubuntu
+  install_apt_packages
+  install_zsh_plugins
+  install_nvm_and_node
+  install_fonts
+  configure_zshrc
+  set_default_shell
+
+  printf '\n'
+  log "Setup complete"
+  printf 'Open a new WSL terminal, or run: exec zsh\n'
+  printf 'Then run: p10k configure\n'
+  printf 'Verify with: node --version && npm --version && nvm current\n'
+}
+
+main "$@"
