@@ -12,6 +12,8 @@ readonly P10K_REPO="https://github.com/romkatv/powerlevel10k.git"
 readonly AUTOSUGGESTIONS_REPO="https://github.com/zsh-users/zsh-autosuggestions.git"
 readonly SYNTAX_HIGHLIGHTING_REPO="https://github.com/zsh-users/zsh-syntax-highlighting.git"
 readonly FONT_BASE_URL="https://github.com/romkatv/powerlevel10k-media/raw/master"
+readonly GH_KEYRING_URL="https://cli.github.com/packages/githubcli-archive-keyring.gpg"
+readonly GH_KEYRING_SHA256="6084d5d7bd8e288441e0e94fc6275570895da18e6751f70f057485dc2d1a811b"
 readonly TARGET_USER="$(id -un)"
 readonly ZDOTDIR_PATH="${ZDOTDIR:-$HOME}"
 readonly ZSHRC="${ZDOTDIR_PATH}/.zshrc"
@@ -96,6 +98,44 @@ install_apt_packages() {
   sudo -v
   sudo apt-get update
   sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
+}
+
+install_github_cli() {
+  if command -v gh >/dev/null 2>&1; then
+    log "Already installed: GitHub CLI"
+    return
+  fi
+
+  local architecture keyring_file source_file temporary_file actual_sha256
+  architecture="$(dpkg --print-architecture)"
+  keyring_file="/etc/apt/keyrings/githubcli-archive-keyring.gpg"
+  source_file="/etc/apt/sources.list.d/github-cli.list"
+  temporary_file="$(mktemp)"
+
+  log "Installing GitHub CLI from the official package repository"
+  if ! curl --fail --location --retry 3 --retry-all-errors --connect-timeout 15 \
+    "$GH_KEYRING_URL" --output "$temporary_file"; then
+    rm -f "$temporary_file"
+    die "Could not download the GitHub CLI package keyring."
+  fi
+
+  actual_sha256="$(sha256sum "$temporary_file" | cut -d' ' -f1)"
+  if [[ "$actual_sha256" != "$GH_KEYRING_SHA256" ]]; then
+    rm -f "$temporary_file"
+    die "The GitHub CLI package keyring checksum did not match the expected value."
+  fi
+
+  sudo install -D -m 0644 "$temporary_file" "$keyring_file"
+  rm -f "$temporary_file"
+
+  temporary_file="$(mktemp)"
+  printf 'deb [arch=%s signed-by=%s] https://cli.github.com/packages stable main\n' \
+    "$architecture" "$keyring_file" > "$temporary_file"
+  sudo install -D -m 0644 "$temporary_file" "$source_file"
+  rm -f "$temporary_file"
+
+  sudo apt-get update
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gh
 }
 
 clone_if_missing() {
@@ -302,6 +342,9 @@ main() {
   require_non_root
   require_ubuntu
   install_apt_packages
+  if [[ "${INSTALL_EXTRA_TOOLS:-1}" == "1" ]]; then
+    install_github_cli
+  fi
   install_zsh_plugins
   install_nvm_and_node
   install_fonts
