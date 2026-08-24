@@ -425,7 +425,7 @@ append_zsh_block() {
   printf '\n# zsh-autosuggestions\n'
   printf '[[ -r %s/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source %s/zsh-autosuggestions/zsh-autosuggestions.zsh\n' "$plugin_dir_quoted" "$plugin_dir_quoted"
   printf '\n# zsh-syntax-highlighting must be sourced last\n'
-  printf '[[ -r %s/zsh-syntax-highlighting.zsh ]] && source %s/zsh-syntax-highlighting.zsh\n' "$plugin_dir_quoted" "$plugin_dir_quoted"
+  printf '[[ -r %s/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]] && source %s/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh\n' "$plugin_dir_quoted" "$plugin_dir_quoted"
   printf '%s\n' "$ZSHRC_END"
 }
 
