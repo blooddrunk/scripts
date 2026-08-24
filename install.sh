@@ -14,6 +14,7 @@ readonly SYNTAX_HIGHLIGHTING_REPO="https://github.com/zsh-users/zsh-syntax-highl
 readonly FONT_BASE_URL="https://github.com/romkatv/powerlevel10k-media/raw/master"
 readonly GH_KEYRING_URL="https://cli.github.com/packages/githubcli-archive-keyring.gpg"
 readonly GH_KEYRING_SHA256="6084d5d7bd8e288441e0e94fc6275570895da18e6751f70f057485dc2d1a811b"
+readonly PNPM_INSTALL_URL="https://get.pnpm.io/install.sh"
 readonly TARGET_USER="$(id -un)"
 readonly ZDOTDIR_PATH="${ZDOTDIR:-$HOME}"
 readonly ZSHRC="${ZDOTDIR_PATH}/.zshrc"
@@ -21,6 +22,7 @@ readonly ZSH_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zsh"
 readonly ZSH_PLUGIN_DIR="${ZSH_DATA_DIR}/plugins"
 readonly P10K_DIR="${P10K_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/powerlevel10k}"
 readonly NVM_DIR_PATH="${NVM_DIR:-${XDG_CONFIG_HOME:-$HOME}/nvm}"
+readonly PNPM_HOME_PATH="${PNPM_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}"
 readonly LINUX_FONT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/MesloLGS-NF"
 readonly ZSHRC_START="# >>> wsl-dev-setup >>>"
 readonly ZSHRC_END="# <<< wsl-dev-setup <<<"
@@ -31,6 +33,16 @@ readonly -a FONT_FILES=(
   "MesloLGS NF Italic.ttf"
   "MesloLGS NF Bold Italic.ttf"
 )
+
+if [[ -n "${INSTALL_EXTRA_TOOLS+x}" && -z "${INSTALL_EXTRAS+x}" ]]; then
+  INSTALL_EXTRAS="$INSTALL_EXTRA_TOOLS"
+fi
+
+INSTALL_SHELL="${INSTALL_SHELL:-1}"
+INSTALL_NODE="${INSTALL_NODE:-1}"
+INSTALL_GH="${INSTALL_GH:-1}"
+INSTALL_PNPM="${INSTALL_PNPM:-1}"
+INSTALL_EXTRAS="${INSTALL_EXTRAS:-1}"
 
 log() {
   printf '\033[1;32m==>\033[0m %s\n' "$*"
@@ -53,6 +65,68 @@ on_error() {
 
 trap 'on_error "$LINENO"' ERR
 
+validate_component_selection() {
+  local component value
+
+  for component in INSTALL_SHELL INSTALL_NODE INSTALL_GH INSTALL_PNPM INSTALL_EXTRAS; do
+    value="${!component}"
+    [[ "$value" == "0" || "$value" == "1" ]] || die "${component} must be 0 or 1; received: ${value}"
+  done
+}
+
+ask_yes_no() {
+  local label=$1
+  local default=$2
+  local answer
+
+  if [[ "$default" == "1" ]]; then
+    printf '%s [Y/n] ' "$label"
+  else
+    printf '%s [y/N] ' "$label"
+  fi
+
+  if ! IFS= read -r answer < /dev/tty; then
+    SELECTION_REPLY="$default"
+    return
+  fi
+
+  case "${answer,,}" in
+    y|yes) SELECTION_REPLY=1 ;;
+    n|no) SELECTION_REPLY=0 ;;
+    '') SELECTION_REPLY="$default" ;;
+    *)
+      warn "Unrecognized answer; keeping the default."
+      SELECTION_REPLY="$default"
+      ;;
+  esac
+}
+
+select_components() {
+  validate_component_selection
+
+  if [[ "${SETUP_NONINTERACTIVE:-0}" == "1" || "${CI:-0}" == "1" || ! -r /dev/tty ]]; then
+    log "Using component defaults; set INSTALL_* variables to customize a non-interactive run."
+    return
+  fi
+
+  printf '\nChoose setup components. Press Enter to keep each default.\n\n'
+  ask_yes_no "Install the Zsh + Powerlevel10k shell experience?" "$INSTALL_SHELL"
+  INSTALL_SHELL="$SELECTION_REPLY"
+  ask_yes_no "Install nvm and the latest Node.js LTS?" "$INSTALL_NODE"
+  INSTALL_NODE="$SELECTION_REPLY"
+  ask_yes_no "Install GitHub CLI (gh)?" "$INSTALL_GH"
+  INSTALL_GH="$SELECTION_REPLY"
+  ask_yes_no "Install pnpm?" "$INSTALL_PNPM"
+  INSTALL_PNPM="$SELECTION_REPLY"
+  ask_yes_no "Install extra CLI tools (fzf, ripgrep, fd, bat, jq, tree, direnv)?" "$INSTALL_EXTRAS"
+  INSTALL_EXTRAS="$SELECTION_REPLY"
+  validate_component_selection
+
+  if [[ "$INSTALL_SHELL" == "0" && ( "$INSTALL_NODE" == "1" || "$INSTALL_PNPM" == "1" ) ]]; then
+    warn "Shell setup is disabled; Node/pnpm will be installed and configured for Bash instead."
+  fi
+}
+
 require_ubuntu() {
   [[ -r /etc/os-release ]] || die "This script needs an Ubuntu-based WSL distro."
 
@@ -70,9 +144,7 @@ install_apt_packages() {
   local -a packages=(
     ca-certificates
     curl
-    fontconfig
     git
-    zsh
     build-essential
     libssl-dev
     pkg-config
@@ -82,7 +154,18 @@ install_apt_packages() {
     xz-utils
   )
 
-  if [[ "${INSTALL_EXTRA_TOOLS:-1}" == "1" ]]; then
+  if [[ "$INSTALL_SHELL" == "1" ]]; then
+    packages+=(
+      fontconfig
+      zsh
+    )
+  fi
+
+  if [[ "$INSTALL_PNPM" == "1" ]]; then
+    packages+=(libatomic1)
+  fi
+
+  if [[ "$INSTALL_EXTRAS" == "1" ]]; then
     packages+=(
       bat
       direnv
@@ -195,6 +278,46 @@ install_nvm_and_node() {
   nvm use "$lts_version" >/dev/null
 }
 
+install_pnpm() {
+  export PNPM_HOME="$PNPM_HOME_PATH"
+  export PATH="$PNPM_HOME:$PNPM_HOME/bin:$PATH"
+
+  if command -v pnpm >/dev/null 2>&1; then
+    log "Already installed: pnpm"
+    return
+  fi
+
+  local installer setup_home profile_shell
+  installer="$(mktemp)"
+  setup_home="$(mktemp -d)"
+  profile_shell="${SHELL:-$(command -v bash)}"
+
+  if [[ "$INSTALL_SHELL" == "1" ]] && command -v zsh >/dev/null 2>&1; then
+    profile_shell="$(command -v zsh)"
+  fi
+
+  log "Installing pnpm"
+  curl --fail --location --retry 3 --retry-all-errors --connect-timeout 15 \
+    "$PNPM_INSTALL_URL" --output "$installer"
+
+  if [[ -n "${PNPM_VERSION:-}" ]]; then
+    if ! HOME="$setup_home" PNPM_HOME="$PNPM_HOME_PATH" PNPM_VERSION="$PNPM_VERSION" ENV="$setup_home/.profile" SHELL="$profile_shell" \
+      sh "$installer"; then
+      rm -rf "$installer" "$setup_home"
+      die "pnpm installation failed."
+    fi
+  elif ! HOME="$setup_home" PNPM_HOME="$PNPM_HOME_PATH" ENV="$setup_home/.profile" SHELL="$profile_shell" \
+    sh "$installer"; then
+    rm -rf "$installer" "$setup_home"
+    die "pnpm installation failed."
+  fi
+
+  rm -f "$installer"
+  rm -rf "$setup_home"
+  command -v pnpm >/dev/null 2>&1 || die "pnpm was installed but is not available on PATH."
+  log "Installed pnpm $(pnpm --version)"
+}
+
 download_font() {
   local font_name=$1
   local encoded_name=${font_name// /%20}
@@ -258,65 +381,117 @@ quote_for_shell() {
   printf '%q' "$1"
 }
 
-configure_zshrc() {
-  local nvm_dir_quoted p10k_dir_quoted plugin_dir_quoted zdotdir_quoted
-  local temporary_file
-
-  mkdir -p "$ZDOTDIR_PATH"
-  touch "$ZSHRC"
+append_zsh_block() {
+  local nvm_dir_quoted p10k_dir_quoted plugin_dir_quoted pnpm_home_quoted zdotdir_quoted
 
   nvm_dir_quoted="$(quote_for_shell "$NVM_DIR_PATH")"
   p10k_dir_quoted="$(quote_for_shell "$P10K_DIR")"
   plugin_dir_quoted="$(quote_for_shell "$ZSH_PLUGIN_DIR")"
+  pnpm_home_quoted="$(quote_for_shell "$PNPM_HOME_PATH")"
   zdotdir_quoted="$(quote_for_shell "$ZDOTDIR_PATH")"
 
-  if ! grep -Fqx "$ZSHRC_START" "$ZSHRC" 2>/dev/null; then
-    cp -p "$ZSHRC" "${ZSHRC}.pre-wsl-dev-setup"
-  fi
+  printf '%s\n' "$ZSHRC_START"
+  printf '%s\n' '# Managed by wsl-dev-setup. Rerunning the installer replaces only this block.'
 
-  temporary_file="$(mktemp "${ZSHRC}.tmp.XXXXXX")"
-  awk -v start="$ZSHRC_START" -v end="$ZSHRC_END" '
-    $0 == start { inside = 1; next }
-    $0 == end { inside = 0; next }
-    !inside { print }
-  ' "$ZSHRC" > "$temporary_file"
-
-  {
-    [[ ! -s "$temporary_file" ]] || printf '\n'
-    printf '%s\n' "$ZSHRC_START"
-    printf '%s\n' '# Managed by wsl-dev-setup. Rerunning the installer replaces only this block.'
+  if [[ "$INSTALL_NODE" == "1" ]]; then
     printf 'export NVM_DIR=%s\n' "$nvm_dir_quoted"
     printf '[[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"\n'
     printf '\n'
-    printf '# Powerlevel10k\n'
-    printf 'if [[ -r %s/powerlevel10k.zsh-theme ]]; then\n' "$p10k_dir_quoted"
-    printf '  source %s/powerlevel10k.zsh-theme\n' "$p10k_dir_quoted"
-    printf 'fi\n'
-    printf '[[ ! -r %s/.p10k.zsh ]] || source %s/.p10k.zsh\n' "$zdotdir_quoted" "$zdotdir_quoted"
-    printf '\n'
-    printf '# Completion and useful Ubuntu developer tools\n'
-    printf 'autoload -Uz compinit && compinit\n'
+  fi
+
+  printf '# Powerlevel10k\n'
+  printf 'if [[ -r %s/powerlevel10k.zsh-theme ]]; then\n' "$p10k_dir_quoted"
+  printf '  source %s/powerlevel10k.zsh-theme\n' "$p10k_dir_quoted"
+  printf 'fi\n'
+  printf '[[ ! -r %s/.p10k.zsh ]] || source %s/.p10k.zsh\n' "$zdotdir_quoted" "$zdotdir_quoted"
+
+  if [[ "$INSTALL_PNPM" == "1" ]]; then
+    printf '\n# pnpm\n'
+    printf 'export PNPM_HOME=%s\n' "$pnpm_home_quoted"
+    printf 'case ":$PATH:" in *":$PNPM_HOME:"*) ;; *) export PATH="$PNPM_HOME:$PATH" ;; esac\n'
+    printf 'case ":$PATH:" in *":$PNPM_HOME/bin:"*) ;; *) export PATH="$PNPM_HOME/bin:$PATH" ;; esac\n'
+  fi
+
+  printf '\n# Completion and useful Ubuntu developer tools\n'
+  printf 'autoload -Uz compinit && compinit\n'
+  if [[ "$INSTALL_EXTRAS" == "1" ]]; then
     printf '[[ -r /usr/share/doc/fzf/examples/key-bindings.zsh ]] && source /usr/share/doc/fzf/examples/key-bindings.zsh\n'
     printf '[[ -r /usr/share/doc/fzf/examples/completion.zsh ]] && source /usr/share/doc/fzf/examples/completion.zsh\n'
     printf 'if command -v direnv >/dev/null 2>&1; then eval "$(direnv hook zsh)"; fi\n'
     printf 'if command -v fdfind >/dev/null 2>&1; then alias fd="fdfind"; fi\n'
     printf 'if command -v batcat >/dev/null 2>&1; then alias bat="batcat"; fi\n'
-    printf '\n'
-    printf '# zsh-autosuggestions\n'
-    printf '[[ -r %s/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source %s/zsh-autosuggestions/zsh-autosuggestions.zsh\n' "$plugin_dir_quoted" "$plugin_dir_quoted"
-    printf '\n'
-    printf '# zsh-syntax-highlighting must be sourced last\n'
-    printf '[[ -r %s/zsh-syntax-highlighting.zsh ]] && source %s/zsh-syntax-highlighting.zsh\n' "$plugin_dir_quoted" "$plugin_dir_quoted"
-    printf '%s\n' "$ZSHRC_END"
+  fi
+
+  printf '\n# zsh-autosuggestions\n'
+  printf '[[ -r %s/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source %s/zsh-autosuggestions/zsh-autosuggestions.zsh\n' "$plugin_dir_quoted" "$plugin_dir_quoted"
+  printf '\n# zsh-syntax-highlighting must be sourced last\n'
+  printf '[[ -r %s/zsh-syntax-highlighting.zsh ]] && source %s/zsh-syntax-highlighting.zsh\n' "$plugin_dir_quoted" "$plugin_dir_quoted"
+  printf '%s\n' "$ZSHRC_END"
+}
+
+append_bash_block() {
+  local nvm_dir_quoted pnpm_home_quoted
+
+  nvm_dir_quoted="$(quote_for_shell "$NVM_DIR_PATH")"
+  pnpm_home_quoted="$(quote_for_shell "$PNPM_HOME_PATH")"
+
+  printf '%s\n' "$ZSHRC_START"
+  printf '%s\n' '# Managed by wsl-dev-setup. Rerunning the installer replaces only this block.'
+
+  if [[ "$INSTALL_NODE" == "1" ]]; then
+    printf 'export NVM_DIR=%s\n' "$nvm_dir_quoted"
+    printf '[[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"\n'
+  fi
+
+  if [[ "$INSTALL_PNPM" == "1" ]]; then
+    printf '\n# pnpm\n'
+    printf 'export PNPM_HOME=%s\n' "$pnpm_home_quoted"
+    printf 'case ":$PATH:" in *":$PNPM_HOME:"*) ;; *) export PATH="$PNPM_HOME:$PATH" ;; esac\n'
+    printf 'case ":$PATH:" in *":$PNPM_HOME/bin:"*) ;; *) export PATH="$PNPM_HOME/bin:$PATH" ;; esac\n'
+  fi
+
+  printf '%s\n' "$ZSHRC_END"
+}
+
+write_managed_block() {
+  local profile=$1
+  local callback=$2
+  local temporary_file
+
+  mkdir -p "$(dirname "$profile")"
+  touch "$profile"
+
+  if ! grep -Fqx "$ZSHRC_START" "$profile" 2>/dev/null; then
+    cp -p "$profile" "${profile}.pre-wsl-dev-setup"
+  fi
+
+  temporary_file="$(mktemp "${profile}.tmp.XXXXXX")"
+  awk -v start="$ZSHRC_START" -v end="$ZSHRC_END" '
+    $0 == start { inside = 1; next }
+    $0 == end { inside = 0; next }
+    !inside { print }
+  ' "$profile" > "$temporary_file"
+
+  {
+    [[ ! -s "$temporary_file" ]] || printf '\n'
+    "$callback"
   } >> "$temporary_file"
 
-  if ! cmp -s "$temporary_file" "$ZSHRC"; then
-    mv "$temporary_file" "$ZSHRC"
+  if ! cmp -s "$temporary_file" "$profile"; then
+    mv "$temporary_file" "$profile"
   else
     rm -f "$temporary_file"
   fi
 
-  log "Configured ${ZSHRC}"
+  log "Configured ${profile}"
+}
+
+configure_shell_profiles() {
+  if [[ "$INSTALL_SHELL" == "1" ]]; then
+    write_managed_block "$ZSHRC" append_zsh_block
+  elif [[ "$INSTALL_NODE" == "1" || "$INSTALL_PNPM" == "1" ]]; then
+    write_managed_block "$HOME/.bashrc" append_bash_block
+  fi
 }
 
 set_default_shell() {
@@ -341,21 +516,35 @@ set_default_shell() {
 main() {
   require_non_root
   require_ubuntu
+  select_components
   install_apt_packages
-  if [[ "${INSTALL_EXTRA_TOOLS:-1}" == "1" ]]; then
+  if [[ "$INSTALL_GH" == "1" ]]; then
     install_github_cli
   fi
-  install_zsh_plugins
-  install_nvm_and_node
-  install_fonts
-  configure_zshrc
-  set_default_shell
+  if [[ "$INSTALL_SHELL" == "1" ]]; then
+    install_zsh_plugins
+    install_fonts
+    set_default_shell
+  fi
+  if [[ "$INSTALL_NODE" == "1" ]]; then
+    install_nvm_and_node
+  fi
+  if [[ "$INSTALL_PNPM" == "1" ]]; then
+    install_pnpm
+  fi
+  configure_shell_profiles
 
   printf '\n'
   log "Setup complete"
-  printf 'Open a new WSL terminal, or run: exec zsh\n'
-  printf 'Then run: p10k configure\n'
-  printf 'Verify with: node --version && npm --version && nvm current\n'
+  if [[ "$INSTALL_SHELL" == "1" ]]; then
+    printf 'Open a new WSL terminal, or run: exec zsh\n'
+    printf 'Then run: p10k configure\n'
+  fi
+  printf 'Verify with:'
+  [[ "$INSTALL_NODE" == "1" ]] && printf ' node --version'
+  [[ "$INSTALL_PNPM" == "1" ]] && printf ' pnpm --version'
+  [[ "$INSTALL_GH" == "1" ]] && printf ' gh --version'
+  printf '\n'
 }
 
 main "$@"
