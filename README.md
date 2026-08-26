@@ -8,6 +8,7 @@ The installer presents a component menu when run from a terminal. Every current 
 ## What it installs
 
 - Zsh, with Zsh set as the default login shell when the shell component is selected.
+- Oh My Zsh, configured as the Zsh framework.
 - Powerlevel10k, plus the recommended MesloLGS NF font family.
 - `zsh-autosuggestions` and `zsh-syntax-highlighting`.
 - `nvm`, with the latest Node.js LTS installed and selected as the default Node version.
@@ -74,9 +75,25 @@ cd wsl-dev-setup
 The installer is safe to rerun:
 
 - It does not overwrite an existing `.zshrc` or `.bashrc`; it creates a one-time backup and owns only the marked block between `wsl-dev-setup` markers.
-- Existing plugin/theme Git clones are left intact.
+- Existing Oh My Zsh, plugin, and theme Git clones are left intact.
 - The latest Node.js LTS is checked and installed through `nvm` each time.
 - Selecting fewer components does not uninstall components from an earlier run.
+
+### Updating an existing installation
+
+If you ran an older version of this script, update the script and run it again. The installer clones Oh My Zsh and its custom plugins only when their destination is missing, then replaces only its marked `.zshrc` block. Your other Zsh configuration is preserved.
+
+For a local checkout:
+
+```bash
+cd ~/wsl-dev-setup
+git pull --ff-only
+SETUP_NONINTERACTIVE=1 ./install.sh
+```
+
+For a direct GitHub install, run the current `curl` command from the installation section again. Then start a new shell with `exec zsh`.
+
+The previous script stored its clones under `~/.local/share/zsh/plugins` and `~/.local/share/powerlevel10k`. The updated block no longer sources those paths; it uses the Oh My Zsh custom directories below. The old clones are intentionally left in place so the update is non-destructive and can be removed manually after verifying the new setup.
 
 Useful environment variables:
 
@@ -112,15 +129,16 @@ PNPM_VERSION=11.10.0 ./install.sh
 The setup keeps third-party shell code out of the repository and stores it under the user profile:
 
 ```text
-~/.local/share/zsh/plugins/zsh-autosuggestions
-~/.local/share/zsh/plugins/zsh-syntax-highlighting
-~/.local/share/powerlevel10k
+${ZSH:-~/.oh-my-zsh}
+${ZSH_CUSTOM:-${ZSH:-~/.oh-my-zsh}/custom}/plugins/zsh-autosuggestions
+${ZSH_CUSTOM:-${ZSH:-~/.oh-my-zsh}/custom}/plugins/zsh-syntax-highlighting
+${ZSH_CUSTOM:-${ZSH:-~/.oh-my-zsh}/custom}/themes/powerlevel10k
 ${XDG_CONFIG_HOME:-~}/nvm
 ${XDG_DATA_HOME:-~/.local/share}/pnpm
 ${XDG_DATA_HOME:-~/.local/share}/fonts/MesloLGS-NF
 ```
 
-The script uses no shell framework, which keeps startup behavior transparent. If you later decide to use Oh My Zsh, Zim, or another plugin manager, remove the managed plugin/theme lines first so the same components are not loaded twice.
+The plugins follow the Oh My Zsh installation form documented upstream: each repository is cloned into `$ZSH_CUSTOM/plugins`, and its short name is added to the `plugins=(...)` list in `.zshrc`. `zsh-syntax-highlighting` is kept last in that list so it is loaded after the other plugins.
 
 ## Good next additions
 
@@ -135,6 +153,7 @@ Powerlevel10k is included because it is your requested theme. Its upstream proje
 - [`gh auth login` and Git authentication](https://cli.github.com/manual/gh_auth_login)
 - [pnpm installation](https://pnpm.io/installation)
 - [`pnpm setup`](https://pnpm.io/cli/setup)
+- [Oh My Zsh installation](https://github.com/ohmyzsh/ohmyzsh#manual-installation)
 - [Powerlevel10k manual installation and recommended font](https://github.com/romkatv/powerlevel10k#manual)
-- [zsh-autosuggestions manual installation](https://github.com/zsh-users/zsh-autosuggestions#manual-git-clone)
+- [zsh-autosuggestions installation, including Oh My Zsh](https://github.com/zsh-users/zsh-autosuggestions/blob/master/INSTALL.md)
 - [zsh-syntax-highlighting installation](https://github.com/zsh-users/zsh-syntax-highlighting/blob/master/INSTALL.md)

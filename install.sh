@@ -8,6 +8,7 @@ IFS=$'\n\t'
 
 readonly NVM_VERSION="${NVM_VERSION:-v0.40.6}"
 readonly NVM_INSTALL_URL="https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh"
+readonly OH_MY_ZSH_REPO="https://github.com/ohmyzsh/ohmyzsh.git"
 readonly P10K_REPO="https://github.com/romkatv/powerlevel10k.git"
 readonly AUTOSUGGESTIONS_REPO="https://github.com/zsh-users/zsh-autosuggestions.git"
 readonly SYNTAX_HIGHLIGHTING_REPO="https://github.com/zsh-users/zsh-syntax-highlighting.git"
@@ -18,9 +19,10 @@ readonly PNPM_INSTALL_URL="https://get.pnpm.io/install.sh"
 readonly TARGET_USER="$(id -un)"
 readonly ZDOTDIR_PATH="${ZDOTDIR:-$HOME}"
 readonly ZSHRC="${ZDOTDIR_PATH}/.zshrc"
-readonly ZSH_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zsh"
-readonly ZSH_PLUGIN_DIR="${ZSH_DATA_DIR}/plugins"
-readonly P10K_DIR="${P10K_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/powerlevel10k}"
+readonly OH_MY_ZSH_DIR="${ZSH:-$HOME/.oh-my-zsh}"
+readonly ZSH_CUSTOM_DIR="${ZSH_CUSTOM:-${OH_MY_ZSH_DIR}/custom}"
+readonly ZSH_PLUGIN_DIR="${ZSH_CUSTOM_DIR}/plugins"
+readonly P10K_DIR="${P10K_DIR:-${ZSH_CUSTOM_DIR}/themes/powerlevel10k}"
 readonly NVM_DIR_PATH="${NVM_DIR:-${XDG_CONFIG_HOME:-$HOME}/nvm}"
 readonly PNPM_HOME_PATH="${PNPM_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}"
 readonly LINUX_FONT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/MesloLGS-NF"
@@ -238,6 +240,9 @@ clone_if_missing() {
 }
 
 install_zsh_plugins() {
+  # Clone directly so Oh My Zsh does not rewrite .zshrc; the managed block
+  # below is the only part of that file owned by this installer.
+  clone_if_missing "$OH_MY_ZSH_REPO" "$OH_MY_ZSH_DIR"
   clone_if_missing "$AUTOSUGGESTIONS_REPO" "${ZSH_PLUGIN_DIR}/zsh-autosuggestions"
   clone_if_missing "$SYNTAX_HIGHLIGHTING_REPO" "${ZSH_PLUGIN_DIR}/zsh-syntax-highlighting"
   clone_if_missing "$P10K_REPO" "$P10K_DIR"
@@ -382,11 +387,11 @@ quote_for_shell() {
 }
 
 append_zsh_block() {
-  local nvm_dir_quoted p10k_dir_quoted plugin_dir_quoted pnpm_home_quoted zdotdir_quoted
+  local nvm_dir_quoted omz_dir_quoted zsh_custom_dir_quoted pnpm_home_quoted zdotdir_quoted
 
   nvm_dir_quoted="$(quote_for_shell "$NVM_DIR_PATH")"
-  p10k_dir_quoted="$(quote_for_shell "$P10K_DIR")"
-  plugin_dir_quoted="$(quote_for_shell "$ZSH_PLUGIN_DIR")"
+  omz_dir_quoted="$(quote_for_shell "$OH_MY_ZSH_DIR")"
+  zsh_custom_dir_quoted="$(quote_for_shell "$ZSH_CUSTOM_DIR")"
   pnpm_home_quoted="$(quote_for_shell "$PNPM_HOME_PATH")"
   zdotdir_quoted="$(quote_for_shell "$ZDOTDIR_PATH")"
 
@@ -399,9 +404,17 @@ append_zsh_block() {
     printf '\n'
   fi
 
-  printf '# Powerlevel10k\n'
-  printf 'if [[ -r %s/powerlevel10k.zsh-theme ]]; then\n' "$p10k_dir_quoted"
-  printf '  source %s/powerlevel10k.zsh-theme\n' "$p10k_dir_quoted"
+  printf '# Oh My Zsh\n'
+  printf 'export ZSH=%s\n' "$omz_dir_quoted"
+  printf 'export ZSH_CUSTOM=%s\n' "$zsh_custom_dir_quoted"
+  printf 'ZSH_THEME="powerlevel10k/powerlevel10k"\n'
+  printf 'plugins=(\n'
+  printf '  git\n'
+  printf '  zsh-autosuggestions\n'
+  printf '  zsh-syntax-highlighting\n'
+  printf ')\n'
+  printf 'if [[ -r "$ZSH/oh-my-zsh.sh" ]]; then\n'
+  printf '  source "$ZSH/oh-my-zsh.sh"\n'
   printf 'fi\n'
   printf '[[ ! -r %s/.p10k.zsh ]] || source %s/.p10k.zsh\n' "$zdotdir_quoted" "$zdotdir_quoted"
 
@@ -412,8 +425,7 @@ append_zsh_block() {
     printf 'case ":$PATH:" in *":$PNPM_HOME/bin:"*) ;; *) export PATH="$PNPM_HOME/bin:$PATH" ;; esac\n'
   fi
 
-  printf '\n# Completion and useful Ubuntu developer tools\n'
-  printf 'autoload -Uz compinit && compinit\n'
+  printf '\n# Useful Ubuntu developer tools\n'
   if [[ "$INSTALL_EXTRAS" == "1" ]]; then
     printf '[[ -r /usr/share/doc/fzf/examples/key-bindings.zsh ]] && source /usr/share/doc/fzf/examples/key-bindings.zsh\n'
     printf '[[ -r /usr/share/doc/fzf/examples/completion.zsh ]] && source /usr/share/doc/fzf/examples/completion.zsh\n'
@@ -422,10 +434,6 @@ append_zsh_block() {
     printf 'if command -v batcat >/dev/null 2>&1; then alias bat="batcat"; fi\n'
   fi
 
-  printf '\n# zsh-autosuggestions\n'
-  printf '[[ -r %s/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source %s/zsh-autosuggestions/zsh-autosuggestions.zsh\n' "$plugin_dir_quoted" "$plugin_dir_quoted"
-  printf '\n# zsh-syntax-highlighting must be sourced last\n'
-  printf '[[ -r %s/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]] && source %s/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh\n' "$plugin_dir_quoted" "$plugin_dir_quoted"
   printf '%s\n' "$ZSHRC_END"
 }
 
@@ -547,4 +555,6 @@ main() {
   printf '\n'
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
