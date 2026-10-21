@@ -1,0 +1,11 @@
+# 依赖
+node_modules/
+
+# 本地分析材料（含牛客专有前端代码，不宜公开分发）
+references/
+
+# WSL 附件标记
+*.Zone.Identifier
+
+# playwright-cli 会话产物
+.playwright-cli/

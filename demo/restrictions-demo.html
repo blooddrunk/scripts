@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>前端限制复刻 Demo（模拟 nowcoder 考试页）</title>
+<style>
+  body { font: 14px/1.7 system-ui, sans-serif; margin: 24px; color: #222; }
+  .panel { border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; margin: 12px 0; }
+  .noselect-css { user-select: none; -webkit-user-select: none; background: #f6f8fa; padding: 8px; }
+  #board { position: fixed; top: 12px; right: 12px; background: rgba(0,0,0,.8); color: #0f0;
+           padding: 10px 14px; border-radius: 8px; font: 12px/1.6 monospace; white-space: pre; z-index: 99999; }
+  button { padding: 6px 14px; }
+  .viol { color: #d00; font-weight: bold; }
+</style>
+</head>
+<body oncontextmenu="window.__demo.inlineCtx++; return false;">
+
+<h2>前端限制复刻 Demo</h2>
+<p>本页面复刻 nowcoder 考试前端的限制手法（visibilitychange / blur 上报、强制全屏、
+copy/cut/selectstart 拦截、右键禁用、快捷键屏蔽、退出意图、console 禁用、违规 alert），
+用于验证 web-ux-freedom.user.js 的效果。右上角为触发计数板。</p>
+
+<div class="panel">
+  <b>1. 切屏/失焦监控</b>（切到别的标签页或点击其他窗口试试）<br>
+  <span id="visMsg">正常作答中…</span>
+</div>
+
+<div class="panel">
+  <b>2. 强制全屏</b>
+  <button id="fsBtn">开始考试（进入全屏）</button>
+  <span id="fsMsg"></span>
+</div>
+
+<div class="panel noselect-css">
+  <b>3. 禁止复制的内容（CSS user-select:none + copy/cut 拦截）</b>
+  <p id="richText" style="user-select: none; -webkit-user-select: none;">
+    这是一段禁止选中的题目内容。Ship it yesterday: the quick brown fox jumps over the lazy dog.
+  </p>
+  <div id="attrTest" oncopy="window.__demo.inlineCopy++; return false;" oncontextmenu="window.__demo.inlineCtx++; return false;">
+    这一段还带内联 oncopy / oncontextmenu 拦截属性。
+  </div>
+</div>
+
+<div class="panel">
+  <b>4. 快捷键屏蔽</b>：本页拦截 Ctrl+C / Ctrl+U / F12 / F5 / Ctrl+F（试试看）
+</div>
+
+<div class="panel">
+  <b>5. 反调试</b>：本页会禁用 console.log 并刷 console.clear。
+  <button id="dbgBtn">动态 new Function('debugger') 自检（开控制台时卡死）</button>
+</div>
+
+<div id="exitPopup" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:99998;">
+  <div style="background:#fff; max-width:420px; margin:15% auto; padding:24px; border-radius:8px; text-align:center;">
+    <div class="viol">⚠ 检测到您离开页面！</div>
+    <p>（退出意图弹窗：document mouseleave 触发）</p>
+    <button onclick="document.getElementById('exitPopup').style.display='none'">关闭</button>
+  </div>
+</div>
+
+<div id="board">初始化中…</div>
+
+<script>
+// ===== 模拟 nowcoder cts/testV3 的监控逻辑 =====
+window.__demo = {
+  visEvents: 0, hiddenSeen: 0, blurEvents: 0, focusEvents: 0,
+  copyBlocked: 0, inlineCopy: 0, inlineCtx: 0, ctxBlocked: 0, selBlocked: 0,
+  keyBlocked: 0, exitIntent: 0, unloadArmed: false, consoleDisabled: false,
+  fsRequested: 0, fsRealChange: 0, fsWarnShown: 0, dbgLoopOn: false,
+  noopRef: null, // 指向本页用来"禁用 console.log"的空函数
+};
+const D = window.__demo;
+
+function render() {
+  document.getElementById('board').textContent =
+    'visibilitychange: ' + D.visEvents + ' (hidden:' + D.hiddenSeen + ')\n' +
+    'window blur/focus: ' + D.blurEvents + '/' + D.focusEvents + '\n' +
+    'copy/cut blocked: ' + D.copyBlocked + ' (inline:' + D.inlineCopy + ')\n' +
+    'contextmenu: ' + D.ctxBlocked + ' (inline:' + D.inlineCtx + ')\n' +
+    'selectstart: ' + D.selBlocked + '\n' +
+    'keydown blocked: ' + D.keyBlocked + '\n' +
+    'exitIntent: ' + D.exitIntent + '\n' +
+    'fsReq/fsChange/warn: ' + D.fsRequested + '/' + D.fsRealChange + '/' + D.fsWarnShown + '\n' +
+    'consoleDisabled: ' + D.consoleDisabled;
+}
+setInterval(render, 300);
+
+// --- 1. 切屏检测（与 nowcoder 相同：document visibilitychange + window blur/focus）---
+document.addEventListener('visibilitychange', function () {
+  D.visEvents++;
+  if (document.visibilityState === 'hidden') {
+    D.hiddenSeen++;
+    document.getElementById('visMsg').innerHTML = '<span class="viol">⚠ 检测到切屏！已记录跳出（累计 ' + D.hiddenSeen + ' 次）</span>';
+    window.alert('检测到切屏行为，本轮练习已被标记！');
+  }
+});
+window.addEventListener('blur', function () { D.blurEvents++; });
+window.addEventListener('focus', function () { D.focusEvents++; });
+window.onblur = function () { D.blurEvents += 1000; }; // 属性式绑定（另一路径）
+
+// --- 2. 强制全屏（documentElement.requestFullscreen + 全屏监听 + 尺寸探测）---
+var FS_EVENTS = ['fullscreenchange', 'webkitfullscreenchange', 'mozfullscreenchange', 'MSFullscreenChange'];
+FS_EVENTS.forEach(function (t) { document.addEventListener(t, function () { D.fsRealChange++; checkFs(); }); });
+
+function ke() { return window.outerHeight < window.screen.height - 20 || window.outerWidth < window.screen.width - 20; }
+function Ge() { return document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement || null; }
+function toolbarH() { return window.outerHeight - window.innerHeight * (window.outerWidth / window.innerWidth); }
+
+function checkFs() {
+  var real = Ge();
+  if (!real || ke() || toolbarH() < 40 || toolbarH() > 250) {
+    D.fsWarnShown++;
+    document.getElementById('fsMsg').innerHTML = '<span class="viol">⚠ 未处于全屏！（fullscreenElement=' + !!real + ', 窗口化=' + ke() + ', 工具栏=' + Math.round(toolbarH()) + '）</span>';
+  } else {
+    document.getElementById('fsMsg').textContent = '✔ 全屏正常';
+  }
+}
+document.getElementById('fsBtn').addEventListener('click', function () {
+  D.fsRequested++;
+  var el = document.documentElement;
+  var rq = el.requestFullscreen || el.webkitRequestFullscreen;
+  var p = rq && rq.call(el);
+  if (p && p.then) p.then(checkFs, checkFs); else setTimeout(checkFs, 50);
+});
+
+// --- 3. 禁复制/选中（document 级 copy/cut/selectstart/dragstart + 内联属性）---
+document.addEventListener('copy', function (e) { D.copyBlocked++; e.preventDefault(); });
+document.addEventListener('cut', function (e) { D.copyBlocked++; e.preventDefault(); });
+document.addEventListener('selectstart', function (e) { D.selBlocked++; e.preventDefault(); });
+document.addEventListener('dragstart', function (e) { D.selBlocked++; e.preventDefault(); });
+document.addEventListener('contextmenu', function (e) { D.ctxBlocked++; e.preventDefault(); });
+
+// --- 4. 快捷键屏蔽 ---
+document.addEventListener('keydown', function (e) {
+  var k = (e.key || '').toLowerCase();
+  if (k === 'f12' || k === 'f5' || k === 'f3' ||
+      ((e.ctrlKey || e.metaKey) && ['c', 'u', 'f', 's'].indexOf(k) !== -1) ||
+      ((e.ctrlKey || e.metaKey) && e.shiftKey && ['i', 'j', 'c'].indexOf(k) !== -1)) {
+    D.keyBlocked++;
+    e.preventDefault();
+  }
+});
+
+// --- 5. 退出意图 + beforeunload ---
+document.addEventListener('mouseleave', function () { D.exitIntent++; document.getElementById('exitPopup').style.display = 'block'; });
+window.addEventListener('beforeunload', function (e) { D.unloadArmed = true; e.preventDefault(); e.returnValue = '确定离开考试？'; });
+
+// --- 6. 反反调试：禁用 console ---
+D.noopRef = function () {};
+console.log = D.noopRef; // 被脚本锁定后此赋值无效
+console.info = D.noopRef;
+console.clear();
+setInterval(function () { try { console.clear(); } catch (e) {} }, 2000);
+setTimeout(function () {
+  D.consoleDisabled = (console.log === D.noopRef);
+  render();
+}, 100);
+
+document.getElementById('dbgBtn').addEventListener('click', function () {
+  D.dbgLoopOn = true;
+  setInterval(new Function('debugger'), 300); // 动态构造的 debugger 循环
+});
+
+render();
+</script>
+</body>
+</html>
