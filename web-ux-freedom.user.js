@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         网页体验自由 (Web UX Freedom)
 // @namespace    https://github.com/jelinenaro/web-ux-freedom
-// @version      1.0.0
-// @description  解除网站前端的体验限制：切屏/失焦检测、强制全屏与退出全屏检测、禁复制/禁右键/禁选中、屏蔽快捷键(F12/Ctrl+C/F5…)、离开页面拦截、鼠标移出弹窗、反反调试、缩放与滚动限制。基于对 nowcoder.com 考试前端的分析编写，所有功能可按站点开关（油猴菜单）。
+// @version      1.1.0
+// @description  解除网站前端的体验限制：切屏/失焦检测、强制全屏与退出全屏检测、禁复制/禁右键/禁选中、屏蔽快捷键(F12/Ctrl+C/F5…)、离开页面拦截、鼠标移出弹窗、反反调试、缩放与滚动限制。基于对 nowcoder.com 考试前端的分析编写，所有功能可按站点开关（油猴菜单），也可一键将站点加入/移出白名单（本站整体禁用）。
 // @author       jelinenaro
 // @match        *://*/*
 // @run-at       document-start
@@ -46,7 +46,7 @@
   const DOC = W.document;
   const HOST = location.hostname;
   const IS_TOP = (() => { try { return W.top === W.self; } catch (e) { return false; } })();
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
 
   // ---- 原生引用抢救（在任何覆盖之前） ----
   const NAT = {};
@@ -145,6 +145,19 @@
     if (key in OVR) return !!OVR[key];
     if (key in PROFILE) return !!PROFILE[key];
     return DEFAULTS[key] !== false;
+  }
+
+  // ---- 站点白名单：本站整体禁用（在安装任何 hook 之前判定） ----
+  const OFF_KEY = 'site-off:' + HOST;
+  if (store.get(OFF_KEY) === true) {
+    // 完全不碰页面，只留一个恢复入口
+    if (IS_TOP && typeof GM_registerMenuCommand === 'function') {
+      GM_registerMenuCommand('▶️ 移出白名单 —— 本站启用脚本', () => {
+        store.del(OFF_KEY);
+        location.reload();
+      });
+    }
+    return;
   }
 
   /* ================= 2. 统计（window.__WUF__） ================= */
@@ -636,6 +649,11 @@
     if (typeof GM_unregisterMenuCommand === 'function') { menuIds.forEach(id => { try { GM_unregisterMenuCommand(id); } catch (e) {} }); }
     menuIds.length = 0;
     if (typeof GM_registerMenuCommand !== 'function') return;
+    menuIds.push(GM_registerMenuCommand('🚫 加入白名单 —— 本站禁用脚本', () => {
+      store.set(OFF_KEY, true);
+      toast('已加入白名单，即将刷新生效…');
+      W.setTimeout(() => { try { location.reload(); } catch (e) {} }, 600);
+    }));
     FEATURES.forEach(f => {
       const on = eff(f.k);
       const label = (on ? '✅ ' : '⬜ ') + f.n + (on ? '：开' : '：关');

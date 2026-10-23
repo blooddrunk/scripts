@@ -236,8 +236,43 @@ async function runScenario(label, { inject }) {
   await browser.close();
 }
 
+// 白名单场景：预置 site-off 标记后注入，脚本应在安装任何 hook 前整体退出
+async function runWhitelistScenario() {
+  console.log(`\n========== WHITELIST：站点已加入白名单（脚本应整体不生效） ==========`);
+  const browser = await chromium.launch();
+  const ctx = await browser.newContext({
+    viewport: { width: 900, height: 640 },
+    screen: { width: 1920, height: 1080 },
+  });
+  const seed = `localStorage.setItem('gm:site-off:' + location.hostname, 'true');`;
+  await ctx.addInitScript(gmShim + '\n' + seed + '\n' + userjs);
+  const page = await ctx.newPage();
+  await page.goto(demoUrl);
+  await page.waitForTimeout(400);
+
+  const d = (expr) => page.evaluate(expr);
+  check('白名单站点：脚本完全未生效（无 __WUF__）', await d(`typeof window.__WUF__`) === 'undefined');
+  check('白名单站点：user-select 仍为 none', await d(`getComputedStyle(document.getElementById('richText')).userSelect`) === 'none');
+  const copy = await d(`(() => {
+    const e = new ClipboardEvent('copy', { bubbles: true, cancelable: true });
+    document.dispatchEvent(e);
+    return e.defaultPrevented;
+  })()`);
+  check('白名单站点：copy 仍被页面拦截（限制原生保留）', copy === true);
+  const patched = await d(`(() => {
+    try {
+      Object.defineProperty(document, 'hidden', { get: () => true, configurable: true });
+      return true;
+    } catch (e) { return false; }
+  })()`);
+  check('白名单站点：document.hidden 未被锁定', patched === true);
+
+  await browser.close();
+}
+
 await runScenario('CONTROL：不注入脚本（确认限制原生生效）', { inject: false });
 await runScenario('TREATMENT：注入 web-ux-freedom.user.js', { inject: true });
+await runWhitelistScenario();
 
 const failed = results.filter((r) => !r.pass);
 console.log(`\n===== 汇总: ${results.length - failed.length}/${results.length} 通过 =====`);
