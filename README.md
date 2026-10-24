@@ -30,6 +30,7 @@ nowcoder.com 考试前端（`references/test.html`）的逆向分析编写，
 | 解除页面缩放限制 | 移动端 viewport 可缩放 | 重写 `meta[name=viewport]` 的 `user-scalable/maximum-scale` |
 | 解锁页面滚动 | 被弹窗锁死时恢复滚动 | `html,body{overflow:auto!important}`（默认关） |
 | 静音违规警告弹窗 | 「检测到切屏」类 alert 不再出现 | 关键词匹配的 alert/confirm 拦截（confirm 默认选"取消"避免误触交卷流程） |
+| 粘贴自由 | "禁贴外部内容"诚信守卫失效、粘贴/拖放行为不再被追踪 | 注册期丢弃包裹层守卫与顶层 document 捕获级 paste 追踪；事件期对可见输入框把 `getData` 伪装为空串 + `preventDefault` 空操作（Monaco/CodeMirror 隐藏输入区与富文本编辑器自动跳过，不受影响；全局默认关，nowcoder 默认开） |
 
 **站点白名单（整站禁用）**：菜单第一项「🚫 加入白名单——本站禁用脚本」可将当前
 站点整体禁用——脚本在安装任何 hook 之前退出，页面上不留任何痕迹；此后本站菜单
@@ -54,6 +55,30 @@ nowcoder.com 考试前端（`references/test.html`）的逆向分析编写，
   → CSS + 注册拦截 + 捕获期兜底三层瓦解
 - **反调试**：console 禁用 + outer/inner 尺寸差探测 → console 锁定 + 尺寸伪装
 
+### 剪贴板监视链路（AI 实战题"诚信作答"体系）与对抗
+
+逆向发现的三条链路（详见 bundle 中 `handleExternalCopy`/`M0e`/`codeBeforePasted`）：
+
+1. **复制内容捕获**：`document` 级 `copy/cut` 读 `getSelection().toString()`，
+   把你复制的原文 postMessage 转发进答题 iframe（维持"站内复制台账"），
+   并以 qid/paperId 记日志 → 已被"恢复复制"掐断（监听注册即丢弃）。
+2. **粘贴守卫**：`forbidExternalPaste` 开启时，挂在答题 textarea（直接绑定）与
+   非 contenteditable 包裹层（Vue `on:{paste}` 落点）上的守卫读取
+   `getData("text/plain")`，与 5 分钟内站内复制台账（去空白子串比对）不匹配
+   即判定"外部内容"：`preventDefault` 阻止粘贴 + 弹"请勿粘贴外部内容，诚信作答"
+   + 上报指纹（去空白长度+末 8 字符）。**对抗（粘贴自由）**：注册期丢弃包裹层
+   守卫；事件期对"用户可见的" input/textarea 把 `getData` 伪装成恒返回空串、
+   `preventDefault` 变空操作——守卫以为什么都没粘，原生粘贴照常插入；
+   残余弹窗自动点关闭。
+3. **代码编辑器粘贴追踪**：顶层 `document` 捕获级 `paste` 监听打标记
+   `codePasted` 并快照粘贴前全文（`codeBeforePasted`，diff 即得粘贴内容）
+   → 注册期丢弃（仅顶层窗口；iframe 内编辑器如 kindeditor 不受影响）。
+
+**边界说明**：这些守卫只读 `text/plain`——剪贴板里的**图片**对整条链路不可见
+（`getData("text/plain")` 返回空串），粘贴图片既不会被拦截也不会被读走。
+另有一条 `writeText` 后 `readText` 读回比对的复制自检，仅在用户授予过
+`clipboard-read` 权限时运行。
+
 ## 验证
 
 ```bash
@@ -61,10 +86,11 @@ npm install playwright && npx playwright install chromium
 node demo/verify.mjs
 ```
 
-`demo/restrictions-demo.html` 复刻了上述全部限制（带触发计数板），
-`demo/verify.mjs` 以对照组（不注入，确认限制原生生效）+ 实验组
-（注入脚本）+ 白名单组（站点已禁用，确认脚本整体不生效）三跑自动断言，
-当前 48/48 通过。
+`demo/restrictions-demo.html` 复刻了上述全部限制（含诚信粘贴守卫的三种挂载
+结构），`demo/verify.mjs` 以对照组（不注入，确认限制原生生效）+ 实验组
+（注入脚本，粘贴自由通过存储覆盖开启，同时验证菜单开关的持久化路径）
++ 白名单组（站点已禁用，确认脚本整体不生效）三跑自动断言，
+当前 68/68 通过。
 
 ## 已知限制（诚实声明）
 

@@ -35,7 +35,10 @@ async function runScenario(label, { inject }) {
     viewport: { width: 900, height: 640 },   // 明显小于屏幕，制造"窗口化"状态
     screen: { width: 1920, height: 1080 },
   });
-  if (inject) await ctx.addInitScript(gmShim + '\n' + userjs);
+  if (inject) {
+    // file:// 主机名为空、无 nowcoder 档案 → 通过存储覆盖开启 pasteFreedom（同时验证菜单开关的持久化路径）
+    await ctx.addInitScript(gmShim + "\nlocalStorage.setItem('gm:ovr:' + location.hostname, JSON.stringify({ pasteFreedom: true }));\n" + userjs);
+  }
   const page = await ctx.newPage();
   const dialogs = [];
   page.on('dialog', async (d) => { dialogs.push(d.message()); await d.accept().catch(() => {}); });
@@ -231,6 +234,76 @@ async function runScenario(label, { inject }) {
   } else {
     await d(`document.dispatchEvent(new MouseEvent('mouseleave'))`);
     check('[对照] 退出意图弹窗触发', await d(`window.__demo.exitIntent`) >= 1);
+  }
+
+  /* ---- 9. 诚信粘贴守卫（链路②/③） ---- */
+  const paste = await d(`(() => {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', 'EXTERNAL_ANSWER');
+    const e = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+    document.getElementById('answer').dispatchEvent(e);
+    return { prevented: e.defaultPrevented, read: window.__demo.pasteGuardRead, blocked: window.__demo.pasteBlocked };
+  })()`);
+  if (inject) {
+    check('守卫读到的粘贴内容为空串（getData 伪装）', paste.read === '', JSON.stringify(paste));
+    check('粘贴未被拦截（defaultPrevented=false）', paste.prevented === false);
+    check('无拦截计数、无指纹上报载荷', paste.blocked === 0 && await d(`window.__demo.lastFingerprint`) === null);
+    check('包裹层守卫监听被丢弃（wrapperGuardFired=0）', await d(`window.__demo.wrapperGuardFired`) === 0);
+    check('链路③ document 捕获级粘贴追踪被丢弃', await d(`window.__demo.codePastedTracked`) === false);
+    check('守卫监听丢弃计入统计', await d(`(window.__WUF__.stats.dropped['paste@wrapper']||0)`) >= 2
+      && await d(`(window.__WUF__.stats.dropped['paste@doc']||0)`) >= 1);
+  } else {
+    check('[对照] 守卫读到粘贴原文', paste.read === 'EXTERNAL_ANSWER');
+    check('[对照] 粘贴被拦截并计算指纹', paste.prevented === true && paste.blocked >= 1
+      && (await d(`window.__demo.lastFingerprint`)) === '15:L_ANSWER');
+    check('[对照] 包裹层守卫触发', await d(`window.__demo.wrapperGuardFired`) >= 1);
+    check('[对照] 链路③追踪触发', await d(`window.__demo.codePastedTracked`) === true);
+  }
+
+  const rich = await d(`(() => {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', 'RICH_OK');
+    const e = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+    document.getElementById('richEditor').dispatchEvent(e);
+    return { insert: window.__demo.richInsert, wrapGuard: window.__demo.richWrapperGuardFired };
+  })()`);
+  if (inject) {
+    check('contenteditable 编辑器仍读到真实剪贴板并插入', rich.insert === 'RICH_OK');
+    check('富文本包裹层守卫被丢弃（不弹窗不上报）', rich.wrapGuard === 0);
+  } else {
+    check('[对照] 富文本编辑器正常插入', rich.insert === 'RICH_OK');
+    check('[对照] 富文本包裹层守卫触发', rich.wrapGuard >= 1);
+  }
+
+  const monaco = await d(`(() => {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', 'MONACO_OK');
+    const e = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+    document.getElementById('hiddenInput').dispatchEvent(e);
+    return window.__demo.monacoRead;
+  })()`);
+  if (inject) check('隐藏输入区（Monaco 式）粘贴监听不受影响', monaco === 'MONACO_OK', monaco);
+  else check('[对照] 隐藏输入区粘贴正常', monaco === 'MONACO_OK');
+
+  const drop = await d(`(() => {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', 'DROP_TEXT');
+    const e = new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true });
+    document.getElementById('answer').dispatchEvent(e);
+    return { prevented: e.defaultPrevented, read: window.__demo.dropRead, blocked: window.__demo.dropBlocked };
+  })()`);
+  if (inject) {
+    check('拖放守卫读到的内容为空串', drop.read === '' || drop.read === null, JSON.stringify(drop));
+    check('拖放未被拦截', drop.prevented === false && drop.blocked === 0);
+  } else {
+    check('[对照] 拖放被守卫拦截', drop.prevented === true && drop.blocked >= 1 && drop.read === 'DROP_TEXT');
+  }
+
+  if (inject) {
+    await d(`showPasteDialog()`);
+    await page.waitForTimeout(800);
+    const dlg = await d(`document.getElementById('pasteDlgWrap').style.display`);
+    check('残余"请勿粘贴外部内容"弹窗被自动关闭', dlg === 'none', String(dlg));
   }
 
   await browser.close();

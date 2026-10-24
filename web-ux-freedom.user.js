@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         网页体验自由 (Web UX Freedom)
 // @namespace    https://github.com/jelinenaro/web-ux-freedom
-// @version      1.1.0
-// @description  解除网站前端的体验限制：切屏/失焦检测、强制全屏与退出全屏检测、禁复制/禁右键/禁选中、屏蔽快捷键(F12/Ctrl+C/F5…)、离开页面拦截、鼠标移出弹窗、反反调试、缩放与滚动限制。基于对 nowcoder.com 考试前端的分析编写，所有功能可按站点开关（油猴菜单），也可一键将站点加入/移出白名单（本站整体禁用）。
+// @version      1.2.0
+// @description  解除网站前端的体验限制：切屏/失焦检测、强制全屏与退出全屏检测、禁复制/禁右键/禁选中、屏蔽快捷键(F12/Ctrl+C/F5…)、离开页面拦截、鼠标移出弹窗、反反调试、缩放与滚动限制、"禁贴外部内容"诚信粘贴守卫与粘贴行为追踪。基于对 nowcoder.com 考试前端的分析编写，所有功能可按站点开关（油猴菜单），也可一键将站点加入/移出白名单（本站整体禁用）。
 // @author       jelinenaro
 // @match        *://*/*
 // @run-at       document-start
@@ -32,6 +32,19 @@
  *     → 高优先级 CSS + 注册拦截 + 捕获期兜底 stopImmediatePropagation。
  *  4. 反调试：console 禁用 + outer/inner 尺寸差探测开发者工具。
  *     → console 属性锁定 + 动态构造的 Function/eval 剥离 debugger。
+ *  5. 剪贴板监视链路（AI 实战题"诚信作答"体系）：
+ *     ① handleExternalCopy：document 级 copy/cut 读 getSelection().toString() 转发 iframe
+ *        → 已被 aggressiveCopy 掐断（监听注册即丢弃）。
+ *     ② 粘贴守卫 M0e/YAe/JAe：挂在答题 textarea（直接绑定）与非 contenteditable
+ *        包裹元素（Vue on:{paste}）上，getData("text/plain") 读粘贴内容，与 5 分钟内
+ *        站内复制台账（去空白子串比对）不匹配则 preventDefault + 弹"请勿粘贴外部内容"
+ *        + 上报指纹（去空白长度+末8字符）。
+ *        → pasteFreedom：注册期丢弃包裹层守卫；事件期对"可见的" input/textarea 把
+ *          getData 伪装为空串 + preventDefault 空操作（守卫以为没粘贴，原生照常插入）。
+ *          Monaco/CodeMirror 的隐藏输入区（尺寸极小）与 contenteditable 编辑器
+ *          （需要读真实剪贴板）自动跳过，代码编辑器粘贴不受影响。
+ *     ③ 顶层 document 捕获级 paste：updateCodePasted + codeBeforePasted 快照
+ *        → 注册期丢弃（仅顶层窗口；iframe 内编辑器如 kindeditor 不受影响）。
  *
  * 诚实声明：本脚本只解除"前端"体验限制，无法也无意影响服务端行为（判题、
  * 计时、心跳、成绩）。请仅用于练习/模拟等自学场景；正式监考考试请遵守其规则。
@@ -46,7 +59,7 @@
   const DOC = W.document;
   const HOST = location.hostname;
   const IS_TOP = (() => { try { return W.top === W.self; } catch (e) { return false; } })();
-  const VERSION = '1.1.0';
+  const VERSION = '1.2.0';
 
   // ---- 原生引用抢救（在任何覆盖之前） ----
   const NAT = {};
@@ -98,6 +111,7 @@
     zoom: true,           // 解除页面缩放限制（viewport meta）
     scroll: false,        // 解锁页面滚动（默认关，被弹窗锁死时再开）
     alerts: true,         // 静音违规类 alert/confirm 弹窗
+    pasteFreedom: false,  // 粘贴自由：解除"禁贴外部内容"诚信守卫与粘贴行为追踪（全局默认关，nowcoder 默认开）
     debug: false,         // 调试日志
   };
 
@@ -105,7 +119,7 @@
   const DOMAIN_RULES = [
     {
       match: /(^|\.)nowcoder\.com$/i,
-      vals: { aggressiveCopy: true }, // 直接阻断 document 级 copy/cut/contextmenu/selectstart/dragstart（免首次观察）
+      vals: { aggressiveCopy: true, pasteFreedom: true }, // 直接阻断 document 级 copy/cut 等；默认开启粘贴自由
     },
     ...[
       /(^|\.)(docs|sheets|slides|drive)\.google\.com$/i, /(^|\.)figma\.com$/i,
@@ -203,6 +217,21 @@
           void fn;
         };
       }
+    }
+
+    // ---- 粘贴自由：掐断守卫的注册（事件级伪装见 8b 节） ----
+    if (eff('pasteFreedom') && t === 'paste') {
+      const docScope = isWin(target) || isDocScope(target);
+      // 链路③：顶层 document/window 捕获级粘贴追踪（codeBeforePasted 快照）。
+      // 仅限顶层窗口——iframe 内（kindeditor 编辑器等）的 document 级 paste 不动。
+      if (docScope && IS_TOP) { bump(STATS.dropped, 'paste@doc'); dbg('drop paste@doc'); return false; }
+      // 链路②：挂在"非 contenteditable、非输入框"包裹元素上的 paste 监听（守卫位置）。
+      // 编辑器自身逻辑在 contenteditable 或其输入区上，不受影响。
+      if (!docScope && target && target.nodeType === 1 &&
+          !target.isContentEditable && target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
+        bump(STATS.dropped, 'paste@wrapper'); dbg('drop paste@wrapper:', target.tagName, target.className); return false;
+      }
+      // input/textarea（守卫直接绑定）与 contenteditable：放行注册，由事件期伪装对付
     }
 
     if (t === 'resize' && isWin(target) && eff('resizeLie')) return 'RESIZE_LIE';
@@ -494,6 +523,78 @@
     } catch (err) {}
   }, true);
 
+  /* ================= 8b. 粘贴自由：事件期伪装 + 残余弹窗清理 ================= */
+
+  // 粘贴/拖放到"用户可见的" input/textarea 时：把 clipboardData.getData 伪装成恒返回空串、
+  // preventDefault 变空操作。守卫以为什么都没粘 → 不拦截、不弹窗、不上报指纹；
+  // 原生粘贴/拖放不走 getData，照常插入。
+  // 判定"用户可见"以跳过 Monaco/CodeMirror 的隐藏输入区（尺寸极小/移出屏幕），
+  // contenteditable 富文本编辑器需要读真实剪贴板，也不在此处理（其守卫已在注册期丢弃）。
+  function isUserFacingField(el) {
+    try {
+      const r = el.getBoundingClientRect();
+      if (r.width < 30 || r.height < 12 || r.left < -900) return false;
+      const st = W.getComputedStyle(el);
+      return st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0';
+    } catch (e) { return false; }
+  }
+
+  if (NAT.add) ['paste', 'drop'].forEach(type => {
+    NAT.add.call(W, type, function (ev) {
+      if (!eff('pasteFreedom')) return;
+      const tgt = ev.target;
+      if (!tgt || tgt.nodeType !== 1) return;
+      const tag = tgt.tagName;
+      if ((tag !== 'INPUT' && tag !== 'TEXTAREA') || tgt.isContentEditable) return;
+      if (!isUserFacingField(tgt)) return;
+      try {
+        const cd = ev.clipboardData || ev.dataTransfer;
+        if (cd && typeof cd.getData === 'function') cd.getData = function () { return ''; };
+      } catch (e) {}
+      try {
+        Object.defineProperty(ev, 'preventDefault', { configurable: true, value: function () {} });
+      } catch (e) {}
+      bump(STATS.stopped, type + '-shield');
+      dbg(type, 'shielded @', tag);
+    }, true);
+  });
+
+  // 残余的"请勿粘贴外部内容"弹窗自动关闭。element-ui 的 Dialog 用 v-show 切换
+  // display（无 childList 变更），因此用可见性轮询兜底 + childList 观察动态挂载的弹窗。
+  function isNodeVisible(el) {
+    try { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch (e) { return false; }
+  }
+  function closePasteDialog() {
+    const el = DOC.querySelector && DOC.querySelector('.ai-paste-block');
+    if (!el || !isNodeVisible(el)) return;
+    bump(STATS.stopped, 'paste-dialog');
+    const wrap = el.closest && (el.closest('.el-dialog__wrapper') || el.closest('.el-overlay') || el.parentElement);
+    const btn = wrap && (wrap.querySelector('.el-dialog__headerbtn') || wrap.querySelector('[class*="close" i], [class*="Close"]'));
+    if (btn) { try { btn.click(); return; } catch (e) {} }
+    if (wrap) { try { wrap.style.display = 'none'; } catch (e) {} }
+  }
+  function armPasteDialogSweeper() {
+    if (!eff('pasteFreedom') || !DOC.body) return;
+    try {
+      const mo = new W.MutationObserver((muts) => {
+        for (const m of muts) {
+          for (const n of m.addedNodes) {
+            if (!n || n.nodeType !== 1) continue;
+            if ((n.classList && n.classList.contains('ai-paste-block')) ||
+                (n.querySelector && n.querySelector('.ai-paste-block'))) {
+              W.setTimeout(closePasteDialog, 50);
+              return;
+            }
+          }
+        }
+      });
+      mo.observe(DOC.body, { childList: true, subtree: true });
+    } catch (e) {}
+    W.setInterval(() => { if (eff('pasteFreedom')) closePasteDialog(); }, 300);
+  }
+  if (DOC.body) armPasteDialogSweeper();
+  else NAT.add.call(W, 'DOMContentLoaded', armPasteDialogSweeper);
+
   /* ================= 9. 反反调试 ================= */
 
   (function antiAntiDebug() {
@@ -634,6 +735,7 @@
     { k: 'copy',            n: '恢复复制/剪切' },
     { k: 'contextmenu',     n: '恢复右键菜单' },
     { k: 'selection',       n: '恢复文字选中/拖拽' },
+    { k: 'pasteFreedom',    n: '粘贴自由（解除诚信粘贴守卫/追踪）' },
     { k: 'hotkey',          n: '恢复浏览器快捷键' },
     { k: 'unload',          n: '解除离开页面拦截' },
     { k: 'exitIntent',      n: '阻止鼠标移出弹窗' },

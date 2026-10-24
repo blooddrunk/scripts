@@ -59,6 +59,25 @@ copy/cut/selectstart 拦截、右键禁用、快捷键屏蔽、退出意图、co
   </div>
 </div>
 
+<div class="panel">
+  <b>6. 诚信粘贴守卫（复刻 AI 实战题 M0e/actionPaste/链路3）</b><br>
+  <div id="editorWrap" style="border:1px dashed #bbb; padding:8px;">
+    <textarea id="answer" rows="3" style="width:92%;" placeholder="往这里粘贴外部文本试试（守卫直接挂在 textarea 上，包裹层还有一个）"></textarea>
+    <div id="richWrap" style="margin-top:8px;">
+      <div id="richEditor" contenteditable="true" style="min-height:2em; border:1px solid #ccc; padding:4px;">富文本区（contenteditable，slate 式自处理粘贴）</div>
+    </div>
+  </div>
+  <!-- Monaco 式隐藏输入区：粘贴监听必须始终能读到真实剪贴板（回归保护用） -->
+  <textarea id="hiddenInput" style="position:absolute; left:-9999px; width:12px; height:18px; opacity:0;" tabindex="-1" aria-hidden="true"></textarea>
+</div>
+
+<div id="pasteDlgWrap" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:99997;">
+  <div class="el-dialog" style="background:#fff; max-width:380px; margin:20% auto; padding:24px; position:relative; border-radius:8px;">
+    <button class="el-dialog__headerbtn" id="dlgClose" style="position:absolute; top:8px; right:10px; border:0; background:none; cursor:pointer; font-size:16px;">×close</button>
+    <div class="ai-paste-block" style="color:#d00; font-weight:bold;">⚠ 请勿粘贴外部内容，诚信作答</div>
+  </div>
+</div>
+
 <div id="board">初始化中…</div>
 
 <script>
@@ -160,6 +179,58 @@ setTimeout(function () {
 document.getElementById('dbgBtn').addEventListener('click', function () {
   D.dbgLoopOn = true;
   setInterval(new Function('debugger'), 300); // 动态构造的 debugger 循环
+});
+
+// --- 7. 诚信粘贴守卫（复刻 nowcoder AI 实战题，链路②/③）---
+D.pasteGuardRead = null; D.pasteBlocked = 0; D.lastFingerprint = null;
+D.wrapperGuardFired = 0; D.richWrapperGuardFired = 0; D.richInsert = null;
+D.codePastedTracked = false; D.monacoRead = null; D.dropBlocked = 0; D.dropRead = null;
+
+function showPasteDialog() { document.getElementById('pasteDlgWrap').style.display = ''; }
+document.getElementById('dlgClose').addEventListener('click', function () {
+  document.getElementById('pasteDlgWrap').style.display = 'none';
+});
+
+// M0e 复刻：读粘贴文本，"外部"（台账恒空 → 一律外部）则 preventDefault + 弹窗 + 指纹
+function m0e(e) {
+  var p = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+  D.pasteGuardRead = p;
+  if (!p) return false;
+  e.preventDefault();
+  D.pasteBlocked++;
+  D.lastFingerprint = p.replace(/\s+/g, '').length + ':' + p.replace(/\s+/g, '').slice(-8);
+  showPasteDialog();
+  return true;
+}
+// zu 型：守卫直接绑在答题 textarea 上
+document.getElementById('answer').addEventListener('paste', m0e);
+// actionPaste 型：守卫挂在非 contenteditable 包裹层（Vue on:{paste} 落点）
+document.getElementById('editorWrap').addEventListener('paste', function () { D.wrapperGuardFired++; });
+// slate 型：contenteditable 自己处理粘贴（必须能读到真实剪贴板）+ 包裹层守卫
+document.getElementById('richEditor').addEventListener('paste', function (e) {
+  var t = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+  e.preventDefault();
+  D.richInsert = t;
+  this.textContent = t || this.textContent;
+});
+document.getElementById('richWrap').addEventListener('paste', function (e) {
+  D.richWrapperGuardFired++;
+  e.preventDefault();
+  showPasteDialog();
+});
+// 链路③：顶层 document 捕获级粘贴追踪（updateCodePasted + codeBeforePasted 快照）
+document.addEventListener('paste', function () { D.codePastedTracked = true; }, true);
+// Monaco 式回归保护：隐藏输入区的粘贴监听，必须读到真实内容
+document.getElementById('hiddenInput').addEventListener('paste', function (e) {
+  e.preventDefault();
+  D.monacoRead = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+});
+// JAe 型：拖放守卫（读 dataTransfer）
+document.getElementById('answer').addEventListener('drop', function (e) {
+  var dt = e.dataTransfer || e.clipboardData;
+  var p = (dt && dt.getData('text/plain')) || '';
+  D.dropRead = p;
+  if (p) { e.preventDefault(); D.dropBlocked++; showPasteDialog(); }
 });
 
 render();
