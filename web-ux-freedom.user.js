@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         网页体验自由 (Web UX Freedom)
 // @namespace    https://github.com/jelinenaro/web-ux-freedom
-// @version      1.3.0
-// @description  解除网站前端的体验限制：切屏/失焦检测、强制全屏与退出全屏检测、禁复制/禁右键/禁选中、屏蔽快捷键(F12/Ctrl+C/F5…)、离开页面拦截、鼠标移出弹窗、反反调试、缩放与滚动限制、"禁贴外部内容"诚信粘贴守卫与粘贴行为追踪、PrintScreen"截图后清空剪贴板"式拦截。基于对 nowcoder.com 考试前端的分析编写，所有功能可按站点开关（油猴菜单），也可一键将站点加入/移出白名单（本站整体禁用）。
+// @version      1.4.0
+// @description  解除网站前端的体验限制：切屏/失焦检测、强制全屏与退出全屏检测、禁复制/禁右键/禁选中、屏蔽快捷键(F12/Ctrl+C/F5…)、离开页面拦截、鼠标移出弹窗、反反调试、缩放与滚动限制、"禁贴外部内容"诚信粘贴守卫与粘贴行为追踪、PrintScreen"截图后清空剪贴板"式拦截、编辑区外击键隐身（键盘行为记录器致盲）。基于对 nowcoder.com 考试前端的分析编写，所有功能可按站点开关（油猴菜单），也可一键将站点加入/移出白名单（本站整体禁用）。
 // @author       jelinenaro
 // @match        *://*/*
 // @run-at       document-start
@@ -55,6 +55,12 @@
  *       站点监听器（含 onkeyup 属性式）根本收不到事件；
  *       兜底：PrintScreen 后 800ms 窗口内吞掉 Clipboard.write/writeText 与
  *       execCommand('copy'/'cut')，对付绕过事件系统/先于我们注册的清空逻辑。
+ *  7. 键盘行为记录器（vm 链路，actionKeydown）：window（及各 iframe）上的 keydown
+ *     把组合键/功能键/空格标点连同 TimeDeltaMs 攒进 keyboardDataList（字母数字
+ *     内容被刻意过滤），每 5s 批量 sendVirtualData 上报，与鼠标轨迹/粘贴记录同请求。
+ *     → 按键自由：编辑区外击键 stopImmediatePropagation，记录器收不到事件；
+ *       编辑区（input/textarea/contenteditable，含 Monaco/CodeMirror 隐藏输入区）
+ *       内照常放行，站点绑在输入框上的自身快捷键不受影响。
  *
  * 诚实声明：本脚本只解除"前端"体验限制，无法也无意影响服务端行为（判题、
  * 计时、心跳、成绩）。请仅用于练习/模拟等自学场景；正式监考考试请遵守其规则。
@@ -69,7 +75,7 @@
   const DOC = W.document;
   const HOST = location.hostname;
   const IS_TOP = (() => { try { return W.top === W.self; } catch (e) { return false; } })();
-  const VERSION = '1.3.0';
+  const VERSION = '1.4.0';
 
   // ---- 原生引用抢救（在任何覆盖之前） ----
   const NAT = {};
@@ -123,6 +129,7 @@
     alerts: true,         // 静音违规类 alert/confirm 弹窗
     pasteFreedom: false,  // 粘贴自由：解除"禁贴外部内容"诚信守卫与粘贴行为追踪（全局默认关，nowcoder 默认开）
     screenshot: true,     // 截图自由：阻断"PrintScreen 后清空剪贴板/违规上报"式拦截
+    keyFreedom: false,    // 按键自由：编辑区外击键对站点隐身（防键盘行为记录器；会连带屏蔽站点在编辑区外的正常快捷键，全局默认关）
     debug: false,         // 调试日志
   };
 
@@ -130,7 +137,7 @@
   const DOMAIN_RULES = [
     {
       match: /(^|\.)nowcoder\.com$/i,
-      vals: { aggressiveCopy: true, pasteFreedom: true }, // 直接阻断 document 级 copy/cut 等；默认开启粘贴自由
+      vals: { aggressiveCopy: true, pasteFreedom: true, keyFreedom: true }, // 直接阻断 document 级 copy/cut 等；默认开启粘贴自由与按键自由
     },
     ...[
       /(^|\.)(docs|sheets|slides|drive)\.google\.com$/i, /(^|\.)figma\.com$/i,
@@ -670,6 +677,36 @@
     } catch (e) {}
   })();
 
+  /* ================= 8d. 按键自由：编辑区外击键对站点隐身 ================= */
+
+  // 牛客 vm 行为记录链路：window（及各 iframe）上的 keydown 把组合键/功能键连同击键
+  // 间隔攒进 keyboardDataList，每 5s 批量上报（字母数字内容被刻意过滤，但组合键、
+  // 功能键、空格/标点与节奏全量上报）。与"截图自由"同模式：对"目标不是输入框/
+  // 可编辑区"的键盘事件 stopImmediatePropagation——记录器与编辑区外的快捷键拦截器
+  // 统统收不到。编辑区内的击键照常放行：打字、IME、站点绑定在输入框上的自身快捷键
+  // （如 Ctrl+Enter 提交、Monaco/CodeMirror 的按键映射）都不受影响。
+  // 注意：会连带屏蔽站点在编辑区外监听的正常快捷键（如视频站空格暂停），全局默认关。
+  function isTypingEventTarget(ev) {
+    try {
+      const path = ev.composedPath ? ev.composedPath() : [];
+      const el = path.length ? path[0] : ev.target;
+      if (!el || el.nodeType !== 1) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true;
+    } catch (e) { return false; }
+  }
+
+  if (NAT.add) ['keydown', 'keyup', 'keypress'].forEach(type => {
+    [W, DOC].forEach(tgt => {
+      NAT.add.call(tgt, type, function (ev) {
+        if (!eff('keyFreedom') || isTypingEventTarget(ev)) return;
+        try { ev.stopImmediatePropagation(); ev.stopPropagation(); } catch (e) {}
+        bump(STATS.stopped, 'keystroke');
+        dbg('keystroke cloaked:', type, ev.key);
+      }, true);
+    });
+  });
+
   /* ================= 9. 反反调试 ================= */
 
   (function antiAntiDebug() {
@@ -812,6 +849,7 @@
     { k: 'selection',       n: '恢复文字选中/拖拽' },
     { k: 'pasteFreedom',    n: '粘贴自由（解除诚信粘贴守卫/追踪）' },
     { k: 'screenshot',      n: '截图自由（防PrintScreen清剪贴板/上报）' },
+    { k: 'keyFreedom',      n: '按键自由（编辑区外击键对站点隐身）' },
     { k: 'hotkey',          n: '恢复浏览器快捷键' },
     { k: 'unload',          n: '解除离开页面拦截' },
     { k: 'exitIntent',      n: '阻止鼠标移出弹窗' },

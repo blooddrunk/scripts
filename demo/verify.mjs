@@ -36,8 +36,9 @@ async function runScenario(label, { inject }) {
     screen: { width: 1920, height: 1080 },
   });
   if (inject) {
-    // file:// 主机名为空、无 nowcoder 档案 → 通过存储覆盖开启 pasteFreedom（同时验证菜单开关的持久化路径）
-    await ctx.addInitScript(gmShim + "\nlocalStorage.setItem('gm:ovr:' + location.hostname, JSON.stringify({ pasteFreedom: true }));\n" + userjs);
+    // file:// 主机名为空、无 nowcoder 档案 → 通过存储覆盖开启 pasteFreedom/keyFreedom
+    //（同时验证菜单开关的持久化路径，也证明两项默认关、需显式开启）
+    await ctx.addInitScript(gmShim + "\nlocalStorage.setItem('gm:ovr:' + location.hostname, JSON.stringify({ pasteFreedom: true, keyFreedom: true }));\n" + userjs);
   }
   const page = await ctx.newPage();
   const dialogs = [];
@@ -348,6 +349,36 @@ async function runScenario(label, { inject }) {
     check('[对照] PrintScreen 三条监听路径全部触发（psSeen≥3）', ps.seen >= 3, JSON.stringify(ps));
     check('[对照] 剪贴板清空被执行（psWipeCalls≥3）', ps.wipe >= 3);
     check('[对照] 截图违规警告弹出', ps.warn >= 1 && ps.popup === 'block');
+  }
+
+  /* ---- 11. 键盘行为记录器（按键自由） ----
+   * demo 在 window 上记录一切击键（牛客真实实现过滤单个字母数字，demo 为上限复刻）。
+   * 编辑区外派发 Ctrl+Shift+S / Alt+Shift+T / a：对照组全被记录；
+   * 实验组（keyFreedom=on）应完全隐身；在输入框内派发则必须放行（打字/编辑器不受影响）。 */
+  const keys = await d(`(() => {
+    const mk = (opts) => new KeyboardEvent('keydown', Object.assign({ bubbles: true, cancelable: true }, opts));
+    const before = window.__demo.keyLog.length;
+    document.body.dispatchEvent(mk({ key: 's', code: 'KeyS', ctrlKey: true, shiftKey: true }));
+    document.body.dispatchEvent(mk({ key: 't', code: 'KeyT', altKey: true, shiftKey: true }));
+    document.body.dispatchEvent(mk({ key: 'a', code: 'KeyA' }));
+    const outside = window.__demo.keyLog.slice(before);
+    document.getElementById('recInput').dispatchEvent(mk({ key: 'a', code: 'KeyA' }));
+    document.getElementById('recInput').dispatchEvent(mk({ key: 's', code: 'KeyS', ctrlKey: true }));
+    const insideCount = window.__demo.keyLog.length - before - outside.length;
+    return { outside, insideCount };
+  })()`);
+  if (inject) {
+    check('编辑区外击键对记录器完全隐身（组合键+单键 0 条）', keys.outside.length === 0, JSON.stringify(keys.outside));
+    check('输入框内击键照常放行（含站点自身 Ctrl 快捷键）', keys.insideCount === 2, JSON.stringify(keys));
+    check('击键隐身计入统计', await d(`(window.__WUF__.stats.stopped['keystroke']||0)`) >= 3);
+    // PrintScreen 已由"截图自由"更早阻断（8c 在 8d 之前注册），不应重复计数
+    check('PrintScreen 走截图自由路径（keystroke 不含 PS 重复计数）',
+      await d(`(window.__WUF__.stats.stopped['printscreen']||0)`) >= 2);
+  } else {
+    check('[对照] 组合键被记录器捕获', keys.outside.some((k) => k.includes('Ctrl+') && k.includes('Shift+')), JSON.stringify(keys.outside));
+    check('[对照] Alt 组合键被记录器捕获', keys.outside.some((k) => k.includes('Alt+')), JSON.stringify(keys.outside));
+    check('[对照] 单键也被记录（上限复刻）', keys.outside.includes('a'), JSON.stringify(keys.outside));
+    check('[对照] 输入框内击键同样被记录', keys.insideCount === 2, JSON.stringify(keys));
   }
 
   await browser.close();
