@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网页体验自由 (Web UX Freedom)
 // @namespace    https://github.com/jelinenaro/web-ux-freedom
-// @version      1.4.1
+// @version      1.4.2
 // @description  解除网站前端的体验限制：切屏/失焦检测、强制全屏与退出全屏检测、禁复制/禁右键/禁选中、屏蔽快捷键(F12/Ctrl+C/F5…)、离开页面拦截、鼠标移出弹窗、反反调试、缩放与滚动限制、"禁贴外部内容"诚信粘贴守卫与粘贴行为追踪、PrintScreen"截图后清空剪贴板"式拦截、编辑区外击键与注入字符隐身（键盘行为记录器致盲）。基于对 nowcoder.com 考试前端的分析编写，所有功能可按站点开关（油猴菜单），也可一键将站点加入/移出白名单（本站整体禁用）。
 // @author       jelinenaro
 // @match        *://*/*
@@ -32,6 +32,10 @@
  *     → 高优先级 CSS + 注册拦截 + 捕获期兜底 stopImmediatePropagation。
  *  4. 反调试：console 禁用 + outer/inner 尺寸差探测开发者工具。
  *     → console 属性锁定 + 动态构造的 Function/eval 剥离 debugger。
+ *       壳函数 toString 只对自身伪装 native（其余 this 委托原生），否则 core-js
+ *       会把它缓存为"原生 toString"，全页函数源码变 [native code]，nc-ui 弹窗
+ *       .show() 解析 update:visible 回调源码取属性名会失配（v1.4.2 修复：
+ *       诚信协议弹窗无法弹出）。
  *  5. 剪贴板监视链路（AI 实战题"诚信作答"体系）：
  *     ① handleExternalCopy：document 级 copy/cut 读 getSelection().toString() 转发 iframe
  *        → 已被 aggressiveCopy 掐断（监听注册即丢弃）。
@@ -78,7 +82,7 @@
   const DOC = W.document;
   const HOST = location.hostname;
   const IS_TOP = (() => { try { return W.top === W.self; } catch (e) { return false; } })();
-  const VERSION = '1.4.1';
+  const VERSION = '1.4.2';
 
   // ---- 原生引用抢救（在任何覆盖之前） ----
   const NAT = {};
@@ -746,7 +750,15 @@
     // 9.2 剥离动态构造的 debugger（new Function('debugger') / Function('debugger') / eval('debugger')）
     //     注：打包进 bundle 的静态 debugger 语句无法从 JS 层移除，请用 DevTools 的
     //     "Never pause here" 或停用断点按钮应对。
+    //     ⚠️ 壳函数的 toString 只能对"自身"伪装成 native：页面里 core-js（trtc 等 SDK 自带）
+    //     初始化时会执行 uncurryThis(Function.toString) 把它当"原生实现"缓存，之后
+    //     Function.prototype.toString 的补丁对所有普通函数兜底走它。若它无脑返回固定假串，
+    //     全页函数的 toString() 都会变成 "[native code]"——nowcoder nc-ui 的弹窗 .show()
+    //     靠正则解析 update:visible 回调源码提取属性名，会因此失配（v1.4.1 实测导致
+    //     「阅读并签署诚信协议与隐私声明」弹窗无法弹出）。所以：this===壳自身才伪装，
+    //     其余 this 一律委托原生 toString。
     try {
+      const nativeFnToString = Function.prototype.toString;
       const strip = s => (/\bdebugger\b/.test(s) ? String(s).replace(/\bdebugger\b/g, 'void 0') : s);
       const NativeFunction = NAT.Function;
       const Fn = function Function() {
@@ -755,11 +767,18 @@
         return NativeFunction.apply(this, a);
       };
       try { Fn.prototype = NativeFunction.prototype; } catch (e) {}
-      try { Fn.toString = function () { return 'function Function() { [native code] }'; }; } catch (e) {}
+      const fakeNative = (name) => 'function ' + name + '() { [native code] }';
+      const delegatingToString = function toString() {
+        const self = this;
+        if (self === Fn) return fakeNative('Function');
+        if (self === W.eval) return fakeNative('eval');
+        return nativeFnToString.call(self);
+      };
+      try { Object.defineProperty(Fn, 'toString', { value: delegatingToString, writable: true, configurable: true }); } catch (e) {}
       W.Function = Fn;
       try { NativeFunction.prototype.constructor = Fn; } catch (e) {}
       W.eval = function (src) { return NAT.eval.call(W, strip(src)); };
-      try { Object.defineProperty(W.eval, 'toString', { value: function () { return 'function eval() { [native code] }'; } }); } catch (e) {}
+      try { Object.defineProperty(W.eval, 'toString', { value: delegatingToString, writable: true, configurable: true }); } catch (e) {}
     } catch (e) {}
   })();
 
