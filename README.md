@@ -31,6 +31,7 @@ nowcoder.com 考试前端（`references/test.html`）的逆向分析编写，
 | 解锁页面滚动 | 被弹窗锁死时恢复滚动 | `html,body{overflow:auto!important}`（默认关） |
 | 静音违规警告弹窗 | 「检测到切屏」类 alert 不再出现 | 关键词匹配的 alert/confirm 拦截（confirm 默认选"取消"避免误触交卷流程） |
 | 粘贴自由 | "禁贴外部内容"诚信守卫失效、粘贴/拖放行为不再被追踪 | 注册期丢弃包裹层守卫与顶层 document 捕获级 paste 追踪；事件期对可见输入框把 `getData` 伪装为空串 + `preventDefault` 空操作（Monaco/CodeMirror 隐藏输入区与富文本编辑器自动跳过，不受影响；全局默认关，nowcoder 默认开） |
+| 截图自由 | PrintScreen / Alt+PrintScreen 截图不再被"截图后清空剪贴板"式拦截抹掉，也不触发违规上报 | document-start 抢先在 window/document 捕获期对 PrintScreen 事件（key/code=`PrintScreen`、keyCode=44）`stopImmediatePropagation`，站点监听器（含 `onkeyup` 属性式）根本收不到事件；兜底：PrintScreen 后 800ms 内吞掉 `Clipboard.write/writeText` 与 `execCommand('copy'/'cut')` |
 
 **站点白名单（整站禁用）**：菜单第一项「🚫 加入白名单——本站禁用脚本」可将当前
 站点整体禁用——脚本在安装任何 hook 之前退出，页面上不留任何痕迹；此后本站菜单
@@ -79,6 +80,24 @@ nowcoder.com 考试前端（`references/test.html`）的逆向分析编写，
 另有一条 `writeText` 后 `readText` 读回比对的复制自检，仅在用户授予过
 `clipboard-read` 权限时运行。
 
+### 截图快捷键：网页能拦截什么、拦不了什么（分析结论）
+
+先说结论：**网页拦不住操作系统截图这个动作本身，但能把截图"事后作废"**——
+这正是在线考试/监考类前端"拦截 PrintScreen"的真实手法：
+
+- **PrintScreen / Alt+PrintScreen**：Windows 在 OS 层截图并放入剪贴板，浏览器
+  只是事后收到 `keydown/keyup`（key=`PrintScreen`，keyCode=44），页面对其
+  `preventDefault` 毫无作用。但页面可以在 keyup 里立刻**清空剪贴板**
+  （`navigator.clipboard.writeText('')` 或隐藏空 textarea + `execCommand('copy')`），
+  把刚截好的图片抹掉，并弹违规警告、上报——体感上就是"截图被拦截了"。
+  → **截图自由**两层瓦解：事件期抢先 `stopImmediatePropagation` 让站点监听器
+  （window 捕获/document 冒泡/`onkeyup` 属性式）根本收不到按键；兜底在按键后
+  800ms 窗口内吞掉一切剪贴板写入，连"清空"这个动作本身都不会发生。
+- **Win+PrintScreen**：Windows 直接把文件写入 `图片\屏幕截图`，网页无法阻止、
+  也无法删除文件；本功能能做到的只是让站点"看不见"这次按键（不触发违规上报）。
+- **Win+Shift+S（截图工具）/第三方截图**：全程 OS 层，页面最多通过
+  blur/visibilitychange 察觉（已由"防切屏 + 窗口失焦伪装"覆盖）。
+
 ## 验证
 
 ```bash
@@ -87,10 +106,10 @@ node demo/verify.mjs
 ```
 
 `demo/restrictions-demo.html` 复刻了上述全部限制（含诚信粘贴守卫的三种挂载
-结构），`demo/verify.mjs` 以对照组（不注入，确认限制原生生效）+ 实验组
-（注入脚本，粘贴自由通过存储覆盖开启，同时验证菜单开关的持久化路径）
-+ 白名单组（站点已禁用，确认脚本整体不生效）三跑自动断言，
-当前 68/68 通过。
+结构、PrintScreen 三条监听路径上的清空剪贴板拦截），`demo/verify.mjs` 以
+对照组（不注入，确认限制原生生效）+ 实验组（注入脚本，粘贴自由通过存储覆盖
+开启，同时验证菜单开关的持久化路径）+ 白名单组（站点已禁用，确认脚本整体
+不生效）三跑自动断言，当前 78/78 通过。
 
 ## 已知限制（诚实声明）
 

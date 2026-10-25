@@ -306,6 +306,50 @@ async function runScenario(label, { inject }) {
     check('残余"请勿粘贴外部内容"弹窗被自动关闭', dlg === 'none', String(dlg));
   }
 
+  /* ---- 10. PrintScreen 截图拦截（截图自由） ----
+   * 合成 keydown+keyup(key='PrintScreen', keyCode=44) 于 document.body：
+   * 站点在 window捕获/document冒泡/body.onkeyup 三条路径上清空剪贴板+弹违规层。
+   * 对照组应三条路径全部触发；实验组应完全看不见事件，剪贴板写入兜底也应被吞。 */
+  const ps = await d(`(() => {
+    simPS();
+    return { seen: window.__demo.psSeen, wipe: window.__demo.psWipeCalls,
+             warn: window.__demo.psWarnShown, popup: document.getElementById('psPopup').style.display };
+  })()`);
+  if (inject) {
+    check('PrintScreen 事件对页面完全不可见（三条监听路径 psSeen=0）', ps.seen === 0, JSON.stringify(ps));
+    check('剪贴板清空未发生（psWipeCalls=0）', ps.wipe === 0);
+    check('无截图违规警告弹层', ps.warn === 0 && ps.popup !== 'block');
+    check('事件阻断计入统计（keydown+keyup）', await d(`(window.__WUF__.stats.stopped['printscreen']||0)`) >= 2);
+    // 兜底层：模拟"绕过事件系统/先于脚本注册"的清空 —— PrintScreen 后短窗口内直接调用剪贴板写入
+    const wipeGuard = await d(`(async () => {
+      const e = new KeyboardEvent('keyup', { key: 'PrintScreen', bubbles: true });
+      document.body.dispatchEvent(e);
+      const ta = document.createElement('textarea'); document.body.appendChild(ta); ta.select();
+      let execRet = null;
+      try { execRet = document.execCommand('copy'); } catch (err) { execRet = 'err'; }
+      ta.remove();
+      let apiRet = 'none';
+      try { await navigator.clipboard.writeText(''); apiRet = 'resolved'; } catch (err) { apiRet = 'rejected:' + err.name; }
+      return { execRet, apiRet, stat: (window.__WUF__.stats.stopped['clipboard-wipe'] || 0) };
+    })()`);
+    check('兜底：PrintScreen 后 execCommand(copy) 与 clipboard.writeText 均被吞', wipeGuard.stat >= 2, JSON.stringify(wipeGuard));
+    check('兜底：execCommand 伪报成功（true）且 writeText 不触碰原生（无权限错误）',
+      wipeGuard.execRet === true && wipeGuard.apiRet === 'resolved', JSON.stringify(wipeGuard));
+    // 时间窗过期后恢复透传，不影响页面正常复制功能
+    await page.waitForTimeout(900);
+    const after = await d(`(() => {
+      const ta = document.createElement('textarea'); ta.value = 'X'; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (err) {}
+      ta.remove();
+      return window.__WUF__.stats.stopped['clipboard-wipe'] || 0;
+    })()`);
+    check('PrintScreen 时间窗过后剪贴板写入恢复透传', after === wipeGuard.stat, `${wipeGuard.stat} -> ${after}`);
+  } else {
+    check('[对照] PrintScreen 三条监听路径全部触发（psSeen≥3）', ps.seen >= 3, JSON.stringify(ps));
+    check('[对照] 剪贴板清空被执行（psWipeCalls≥3）', ps.wipe >= 3);
+    check('[对照] 截图违规警告弹出', ps.warn >= 1 && ps.popup === 'block');
+  }
+
   await browser.close();
 }
 
