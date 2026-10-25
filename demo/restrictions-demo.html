@@ -86,7 +86,8 @@ copy/cut/selectstart 拦截、右键禁用、快捷键屏蔽、退出意图、co
 <div class="panel">
   <b>9. 键盘行为记录器</b>：window 级 keydown 监听，把击键（含组合键）攒进台账、
   周期批量上报（复刻牛客 vm 链路 keyboardDataList；牛客真实实现会过滤单个字母数字，
-  本 demo 为上限复刻：全记）。在下方输入框内外分别按组合键试试区别。
+  本 demo 为上限复刻：全记）。在下方输入框内外分别按组合键试试区别；VK_PACKET
+  注入字符（keyCode 231，程序代打）也在隐身范围。
   <input id="recInput" style="margin-left:8px;" placeholder="编辑区内击键会放行">
 </div>
 

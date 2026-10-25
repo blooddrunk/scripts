@@ -32,7 +32,7 @@ nowcoder.com 考试前端（`references/test.html`）的逆向分析编写，
 | 静音违规警告弹窗 | 「检测到切屏」类 alert 不再出现 | 关键词匹配的 alert/confirm 拦截（confirm 默认选"取消"避免误触交卷流程） |
 | 粘贴自由 | "禁贴外部内容"诚信守卫失效、粘贴/拖放行为不再被追踪 | 注册期丢弃包裹层守卫与顶层 document 捕获级 paste 追踪；事件期对可见输入框把 `getData` 伪装为空串 + `preventDefault` 空操作（Monaco/CodeMirror 隐藏输入区与富文本编辑器自动跳过，不受影响；全局默认关，nowcoder 默认开） |
 | 截图自由 | PrintScreen / Alt+PrintScreen 截图不再被"截图后清空剪贴板"式拦截抹掉，也不触发违规上报 | document-start 抢先在 window/document 捕获期对 PrintScreen 事件（key/code=`PrintScreen`、keyCode=44）`stopImmediatePropagation`，站点监听器（含 `onkeyup` 属性式）根本收不到事件；兜底：PrintScreen 后 800ms 内吞掉 `Clipboard.write/writeText` 与 `execCommand('copy'/'cut')` |
-| 按键自由 | 编辑区外的击键（组合键/功能键）不再进键盘行为记录台账、不再被上报，编辑区外的快捷键拦截器也一并失明 | document-start 抢先在 window/document 捕获期对"目标不是 input/textarea/select/contenteditable"的键盘事件 `stopImmediatePropagation`；编辑区内照常放行，站点绑在输入框上的自身快捷键（Ctrl+Enter 提交、Monaco/CodeMirror 按键映射）不受影响。会连带屏蔽站点在编辑区外的正常快捷键（如视频站空格暂停），故全局默认关、nowcoder 默认开 |
+| 按键自由 | 编辑区外的击键（组合键/功能键）不再进键盘行为记录台账、不再被上报，编辑区外的快捷键拦截器也一并失明；VK_PACKET 注入字符（SendInput 程序代打的非 ASCII 文本）在编辑区内也隐身，不会绕过过滤被明文记录 | document-start 抢先在 window/document 捕获期对"目标不是 input/textarea/select/contenteditable"的键盘事件 `stopImmediatePropagation`；VK_PACKET（keyCode 231 / 无 code 的单字符 key，物理键盘不可能产生）在编辑区内也一并隐身——只 stopPropagation 不 preventDefault，注入文本仍经 input 事件正常插入。编辑区内其余击键照常放行，站点绑在输入框上的自身快捷键（Ctrl+Enter 提交、Monaco/CodeMirror 按键映射）不受影响。会连带屏蔽站点在编辑区外的正常快捷键（如视频站空格暂停），故全局默认关、nowcoder 默认开 |
 
 **站点白名单（整站禁用）**：菜单第一项「🚫 加入白名单——本站禁用脚本」可将当前
 站点整体禁用——脚本在安装任何 hook 之前退出，页面上不留任何痕迹；此后本站菜单
@@ -117,7 +117,17 @@ bundle 中的 vm 组件（`actionKeydown`）在 window 和每个动态加载的 
 **对抗（按键自由）**：与截图自由同模式，document-start 抢先在捕获期对
 "目标不是输入框/可编辑区"的键盘事件 `stopImmediatePropagation`——记录器与
 编辑区外的快捷键拦截器统统收不到事件；编辑区内（打字、IME、站点绑在输入框
-上的自身快捷键）照常放行。**网页无法干扰其他 App 的全局热键**（RegisterHotKey
+上的自身快捷键）照常放行。
+
+**VK_PACKET 侧门与封堵（v1.4.1）**：实测发现程序代打（SendInput 注入字符，
+如截图 OCR 回填、短语工具）产生 `keydown key='图' code='' keyCode=231`——
+物理键总有 code、IME 走 229/"Process"，这类事件非物理键盘所能产生；而"图"
+不匹配"单字母数字"过滤，会被**明文**写进台账（内容脱敏对注入字符失效）。
+现已在编辑区内对这类 keydown 一并隐身（只 stopPropagation 不 preventDefault，
+注入文本仍经 input 事件正常插入，工具功能不受影响）。另：全局热键工具若用
+RegisterHotKey 注册，主键 keydown 被系统截走，记录器只能看到形如
+`"Alt + Shift"` 的修饰键残影（与输入法切换无异），且它不监听 keyup，连残缺
+指纹都拼不全。**网页无法干扰其他 App 的全局热键**（RegisterHotKey
 被系统直接截走、低级键盘钩子在浏览器之前收到原始按键），此功能解决的是
 "被看见并上报"，不是"被拦截"——后者在系统层面就不可能发生。
 
@@ -129,10 +139,10 @@ node demo/verify.mjs
 ```
 
 `demo/restrictions-demo.html` 复刻了上述全部限制（含诚信粘贴守卫的三种挂载
-结构、PrintScreen 三条监听路径上的清空剪贴板拦截、键盘行为记录器），
-`demo/verify.mjs` 以对照组（不注入，确认限制原生生效）+ 实验组（注入脚本，
-粘贴自由与按键自由通过存储覆盖开启，同时验证菜单开关的持久化路径）
-+ 白名单组（站点已禁用，确认脚本整体不生效）三跑自动断言，当前 86/86 通过。
+结构、PrintScreen 三条监听路径上的清空剪贴板拦截、键盘行为记录器与 VK_PACKET
+注入字符），`demo/verify.mjs` 以对照组（不注入，确认限制原生生效）+ 实验组
+（注入脚本，粘贴自由与按键自由通过存储覆盖开启，同时验证菜单开关的持久化路径）
++ 白名单组（站点已禁用，确认脚本整体不生效）三跑自动断言，当前 90/90 通过。
 
 ## 已知限制（诚实声明）
 

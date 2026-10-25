@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         网页体验自由 (Web UX Freedom)
 // @namespace    https://github.com/jelinenaro/web-ux-freedom
-// @version      1.4.0
-// @description  解除网站前端的体验限制：切屏/失焦检测、强制全屏与退出全屏检测、禁复制/禁右键/禁选中、屏蔽快捷键(F12/Ctrl+C/F5…)、离开页面拦截、鼠标移出弹窗、反反调试、缩放与滚动限制、"禁贴外部内容"诚信粘贴守卫与粘贴行为追踪、PrintScreen"截图后清空剪贴板"式拦截、编辑区外击键隐身（键盘行为记录器致盲）。基于对 nowcoder.com 考试前端的分析编写，所有功能可按站点开关（油猴菜单），也可一键将站点加入/移出白名单（本站整体禁用）。
+// @version      1.4.1
+// @description  解除网站前端的体验限制：切屏/失焦检测、强制全屏与退出全屏检测、禁复制/禁右键/禁选中、屏蔽快捷键(F12/Ctrl+C/F5…)、离开页面拦截、鼠标移出弹窗、反反调试、缩放与滚动限制、"禁贴外部内容"诚信粘贴守卫与粘贴行为追踪、PrintScreen"截图后清空剪贴板"式拦截、编辑区外击键与注入字符隐身（键盘行为记录器致盲）。基于对 nowcoder.com 考试前端的分析编写，所有功能可按站点开关（油猴菜单），也可一键将站点加入/移出白名单（本站整体禁用）。
 // @author       jelinenaro
 // @match        *://*/*
 // @run-at       document-start
@@ -61,6 +61,9 @@
  *     → 按键自由：编辑区外击键 stopImmediatePropagation，记录器收不到事件；
  *       编辑区（input/textarea/contenteditable，含 Monaco/CodeMirror 隐藏输入区）
  *       内照常放行，站点绑在输入框上的自身快捷键不受影响。
+ *       例外：VK_PACKET 注入字符（keyCode 231 / 无 code 的单字符 key，SendInput
+ *       程序代打）非物理键盘所能产生，编辑区内也隐身——否则非 ASCII 字符会绕过
+ *       "单字母数字"过滤被明文记入台账；注入文本仍经 input 事件正常插入。
  *
  * 诚实声明：本脚本只解除"前端"体验限制，无法也无意影响服务端行为（判题、
  * 计时、心跳、成绩）。请仅用于练习/模拟等自学场景；正式监考考试请遵守其规则。
@@ -75,7 +78,7 @@
   const DOC = W.document;
   const HOST = location.hostname;
   const IS_TOP = (() => { try { return W.top === W.self; } catch (e) { return false; } })();
-  const VERSION = '1.4.0';
+  const VERSION = '1.4.1';
 
   // ---- 原生引用抢救（在任何覆盖之前） ----
   const NAT = {};
@@ -686,6 +689,11 @@
   // 统统收不到。编辑区内的击键照常放行：打字、IME、站点绑定在输入框上的自身快捷键
   // （如 Ctrl+Enter 提交、Monaco/CodeMirror 的按键映射）都不受影响。
   // 注意：会连带屏蔽站点在编辑区外监听的正常快捷键（如视频站空格暂停），全局默认关。
+  // 例外：VK_PACKET 注入字符（SendInput 程序代打，keyCode 231 / code 为空的单字符
+  // key）不可能来自物理键盘——物理键总有 code，IME 走 229/"Process"。这类 keydown
+  // 在编辑区内也一并隐身：注入文本仍经 beforeinput/input 正常插入（工具功能不受
+  // 影响，我们只 stopPropagation 不 preventDefault），但记录器看不到——否则像"图"
+  // 这样的非 ASCII 字符会绕过"单字母数字"过滤被明文写进台账。
   function isTypingEventTarget(ev) {
     try {
       const path = ev.composedPath ? ev.composedPath() : [];
@@ -696,13 +704,22 @@
     } catch (e) { return false; }
   }
 
+  function isInjectedKeyEvent(ev) {
+    try {
+      if (ev.keyCode === 231) return true;
+      return ev.code === '' && String(ev.key == null ? '' : ev.key).length === 1;
+    } catch (e) { return false; }
+  }
+
   if (NAT.add) ['keydown', 'keyup', 'keypress'].forEach(type => {
     [W, DOC].forEach(tgt => {
       NAT.add.call(tgt, type, function (ev) {
-        if (!eff('keyFreedom') || isTypingEventTarget(ev)) return;
+        if (!eff('keyFreedom')) return;
+        const injected = isInjectedKeyEvent(ev);
+        if (!injected && isTypingEventTarget(ev)) return; // 编辑区内放行——注入字符除外
         try { ev.stopImmediatePropagation(); ev.stopPropagation(); } catch (e) {}
-        bump(STATS.stopped, 'keystroke');
-        dbg('keystroke cloaked:', type, ev.key);
+        bump(STATS.stopped, injected ? 'keystroke-injected' : 'keystroke');
+        dbg('keystroke cloaked:', type, ev.key, injected ? '(injected)' : '');
       }, true);
     });
   });

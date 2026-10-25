@@ -381,6 +381,25 @@ async function runScenario(label, { inject }) {
     check('[对照] 输入框内击键同样被记录', keys.insideCount === 2, JSON.stringify(keys));
   }
 
+  /* ---- 11b. VK_PACKET 注入字符（SendInput 程序代打） ----
+   * 复刻实测指纹：keydown key='图' code='' keyCode=231（非物理键盘所能产生）。
+   * 对照组：编辑区内也会被记录器明文捕获（绕过"单字母数字"过滤）；
+   * 实验组：编辑区内也隐身，且不拦默认行为（注入文本仍经 input 事件插入）。 */
+  const inj = await d(`(() => {
+    const e = new KeyboardEvent('keydown', { key: '图', code: '', bubbles: true, cancelable: true });
+    try { Object.defineProperty(e, 'keyCode', { value: 231 }); } catch (err) {}
+    const before = window.__demo.keyLog.length;
+    document.getElementById('recInput').dispatchEvent(e);
+    return { prevented: e.defaultPrevented, added: window.__demo.keyLog.length - before };
+  })()`);
+  if (inject) {
+    check('VK_PACKET 注入字符在编辑区内也被隐身', inj.added === 0, JSON.stringify(inj));
+    check('注入隐身不拦默认行为（文本仍可插入）', inj.prevented === false, JSON.stringify(inj));
+    check('注入隐身计入统计', await d(`(window.__WUF__.stats.stopped['keystroke-injected']||0)`) >= 1);
+  } else {
+    check('[对照] 注入字符被记录器明文捕获', inj.added === 1, JSON.stringify(inj));
+  }
+
   await browser.close();
 }
 
