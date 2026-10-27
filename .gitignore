@@ -12,8 +12,12 @@
 # Test fixtures are inert fakes; allow the fixture identity marker by exact path.
 !tests/fixtures/openwrt/etc/tailscale/tailscaled.state
 
-# Generated private snapshots and test output.
-backups/
+# Generated private snapshots and test output.  Curated device snapshots
+# under backups/<device>/ are committed deliberately: the repo MUST stay
+# private because they contain real node credentials.
+backups/*
+!backups/gl-mt3600be/
+!backups/gl-mt3600be/20261027-selfcarry/
 tests/tmp/
 **/.INCOMPLETE
 **/manifest.sha256

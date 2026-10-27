@@ -406,6 +406,34 @@ passwall2 不支持按进程名匹配，且其生成器会把域名/IP 拆成独
 路由器自身 tailscaled 若被 passwall2 接管，只能靠目标 IP/端口命中上述
 规则，或确认 passwall2 未代理本机流量。
 
+### 代理节点与 Headscale 同机部署：防回环排除会让分流永远失效
+
+passwall2 为防代理回环，会把**所有已配置代理节点的服务器 IP**整体
+排除在透明拦截之外（nft 里直接 `return`，整 IP、不限端口，优先级
+高于任何 shunt 分流规则）。因此当 reality/hysteria2 等节点就架在
+Headscale VPS 本机上时，控制域名解析出的 IP 恰好命中排除集合——
+"透明拦截 + 域名分流"**在原理上永远接不住** tailscale 控制流量，
+表现为 approve 后 Serving 反复消失、节点间歇离线（能通通常是有
+别的层在兜底，如上游路由器的 daed）。
+
+正解是让 tailscaled **显式走 socks**，域名交给代理远端解析，绕开
+排除集合（2026-10-27 实战验证，快照与回滚见
+`backups/gl-mt3600be/20261027-selfcarry/`，完整证据链见运维日志
+事件三）：
+
+```sh
+# GL.iNet 固件真正的 init 是 tailscale-core（/etc/init.d/tailscale
+# 是残留文件，重启即消失）；在 TS_DEBUG_FIREWALL_MODE 行后加：
+procd_set_param env ALL_PROXY=socks5://127.0.0.1:1081
+# watchdog（tailscale-failover）探测须同路径，否则裸探测必失败、误切换：
+procd_set_param env https_proxy=socks5h://127.0.0.1:1081 HTTPS_PROXY=socks5h://127.0.0.1:1081
+```
+
+特性：`ALL_PROXY` 只影响 TCP（控制面/DERP），STUN 与 P2P 打洞
+（UDP）不受影响；链路闪断由 tailscaled 自动重拨兜底。代价：DERP
+中继走代理出口（本例为法兰克福，~470–880ms），P2P 可达的站点
+不受影响。
+
 ### 验证
 
 ```sh
@@ -514,6 +542,12 @@ cd /var/backups/headscale-bootstrap/<timestamp> && sudo sha256sum -c manifest.sh
 备份属于敏感运维数据，请保持在 Git 之外（`.gitignore` 已覆盖常见敏感
 文件名；唯一例外是测试用的假身份 fixture，按精确路径放行）。
 
+**例外中的例外**：`backups/<设备>/` 下**人工归档**的关键配置快照
+（含真实节点凭据与主机密码，供灾后恢复用）是刻意提交进仓库的，
+`.gitignore` 对该层放行——因此**本仓库必须保持私有**。首个快照：
+[backups/gl-mt3600be/20261027-selfcarry/](backups/gl-mt3600be/20261027-selfcarry/)
+（gl 路由器自持架构改造，含恢复/回滚/验证命令组与主机凭据表）。
+
 ## 状态文件
 
 - VPS：`/var/lib/headscale-bootstrap/state.json`
@@ -606,4 +640,7 @@ tests/                      fixture 测试与假命令（均为合成数据）
 - [2026-10](docs/ops-log-2026-10.md)：路由器 failback 回切主网；上行
   变更为公司网口后控制面被封的定位与 passwall2 分流；自建 DERP 中继
   交叉组网（移除官方 map、`derp.paths` 本地 map、`verify_clients`
-  放开的代价、临时客户端验证 DERP map 的完整方法与陷阱）。
+  放开的代价、临时客户端验证 DERP map 的完整方法与陷阱）；approve-route
+  无法 Serving 的真相（passwall2 防回环排除代理节点服务器 IP →
+  透明分流原理性失效）与 tailscaled 显式走 socks 的自持架构改造
+  （`ALL_PROXY`，配置快照在 `backups/gl-mt3600be/`）。
