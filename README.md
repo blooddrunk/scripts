@@ -595,5 +595,15 @@ tests/                      fixture 测试与假命令（均为合成数据）
   即为自动检查）。
 - LuCI 界面里的"启用/停止/重启 Tailscale"按钮在本部署中不可用，daemon
   由 `tailscale-core` 管理。
-- 脚本管不到 LAN 客户端设备（如 Windows）上的 Tailscale 偏好；透明
+- 脚本管不到 LAN 客户端设备(如 Windows)上的 Tailscale 偏好；透明
   代理共存场景下客户端侧的 accept-dns 设置见"与透明代理共存"。
+
+## 运维记录
+
+真实环境的事件排查与处置过程（含证据链、踩坑与回滚方法）按月归档在
+[docs/ops-log-*.md](docs/)：
+
+- [2026-10](docs/ops-log-2026-10.md)：路由器 failback 回切主网；上行
+  变更为公司网口后控制面被封的定位与 passwall2 分流；自建 DERP 中继
+  交叉组网（移除官方 map、`derp.paths` 本地 map、`verify_clients`
+  放开的代价、临时客户端验证 DERP map 的完整方法与陷阱）。
