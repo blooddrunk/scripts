@@ -140,7 +140,7 @@ WARN DNS forward to upstream failed dialer=xx-hysteria2 ... network=tcp+4
    dip(104.16.248.249/32, 104.16.249.249/32) -> doh
    ```
 
-   （钉住组**建议**只含 Reality/TCP 节点且**必须跨 VPS**——这是 2026-10-30 实战修订：DoH 钉住组若只有一台 VPS 的节点（hy2+reality 同入口 IP），VPS 抖动时整组全灭、全部国外域名 SERVFAIL，而其他分组正常。只有一台 premium VPS 时另建跨 VPS `doh` 组，`premium` 留给按出口质量选路的规则。`cloudflare-dns.com` 的 A 记录长期为这两个地址，可用 `nslookup cloudflare-dns.com 223.5.5.5` 复核。也可再加一条 `domain(suffix: cloudflare-dns.com) -> doh` 覆盖 A 记录变化——注意这条流量只能靠 SNI 嗅探命中 domain 规则，`dip` 是确定性兜底，详见 README「fallback DoH 上游固定走 Reality 节点」。）
+   （钉住组**必须跨 VPS 且协议多样（reality+hysteria2 混入）**——2026-10-30 实战修订引入跨 VPS 硬要求；2026-11-02 再修订：DoH 钉住组若只有一台 VPS 的节点（hy2+reality 同入口 IP），VPS 抖动时整组全灭；而 reality-only 的跨 VPS 组也会被**协议级/端口级封锁**团灭（见情况 L 根因 4），过滤正则用 `hysteria2|reality`。只有一台 premium VPS 时另建跨 VPS `doh` 组，`premium` 留给按出口质量选路的规则。`cloudflare-dns.com` 的 A 记录长期为这两个地址，可用 `nslookup cloudflare-dns.com 223.5.5.5` 复核。也可再加一条 `domain(suffix: cloudflare-dns.com) -> doh` 覆盖 A 记录变化——注意这条流量只能靠 SNI 嗅探命中 domain 规则，`dip` 是确定性兜底，详见 README「fallback DoH 上游钉到 doh 专用组」。）
 
 ## 情况 G：开启 daed 后，v2rayN 真连接延迟 `-1 ms`
 
@@ -231,9 +231,18 @@ grep -E "Group has no dialer alive|Marking dialer as unavailable" /var/log/daed/
 
 常见根因与修法：
 
-1. **DoH 钉住组只有一台 VPS 的节点**（hy2 + reality 共享同一入口 IP），VPS 抖动时整组全灭。修法：钉住组改为**跨 VPS** 的 Reality/TCP 节点集合（新建 `doh` 组，规则右侧 `-> doh`），见 README「fallback DoH 上游固定走 Reality 节点」。
-2. 钉住组含 Hysteria2 且被 `min` 策略常态选中：UDP QoS 抖动导致 DoH 间歇失败（`http3:` 报错）。修法同上，DoH 承载组建议只放 Reality/TCP。
+1. **DoH 钉住组只有一台 VPS 的节点**（hy2 + reality 共享同一入口 IP），VPS 抖动时整组全灭。修法：钉住组改为**跨 VPS + 协议多样**的节点集合（新建 `doh` 组，规则右侧 `-> doh`），见 README「fallback DoH 上游钉到 doh 专用组」。
+2. 钉住组含 Hysteria2 且被 `min` 策略常态选中：UDP QoS 抖动导致 DoH 间歇失败（`http3:` 报错）。这是**间歇劣化**，与根因 4 的**整组全灭**形态不同；reality 恢复后 `min` 系策略会自动回归 reality 承载。
 3. 全部节点被 `Marking dialer as unavailable due to persistent proxy IP failures` 连坐（上游网络事件/DNS 瘫痪连累节点域名解析）。先解决网络/解析（见情况 F），节点恢复可用后分组自动回血。
+4. **Reality 端口被协议级/端口级封锁团灭（2026-11-02 实战新形态）**：三台不同 VPS 的 Reality/TCP 端口同时被墙，而 VPS 本身存活、同 VPS 的 Hysteria2 正常——`reality` 过滤的跨 VPS doh 组**照样整组全灭**，全部国外域名 SERVFAIL 持续，`proxy` 组流量一切正常。日志特征：全部 reality 节点同时 `Marking dialer as unavailable due to persistent proxy IP failures` + `DNS forward to upstream failed ... [REALITY]: dial to IP:PORT ... connect: connection timed out`。判别（在路由器上）：
+
+   ```sh
+   # 依次测各 VPS：reality 端口 vs 22 端口对照（curl 的 time_connect>0 即 TCP 握手完成）
+   curl -sk --connect-timeout 3 -m 5 -o /dev/null -w '%{time_connect}\n' https://<节点IP>:<reality端口>/
+   curl -sk --connect-timeout 3 -m 5 -o /dev/null -w '%{time_connect}\n' https://<节点IP>:22/
+   ```
+
+   注意：Routing 中节点端口的 `must_direct` 规则会让 reality 端口测试**直连**（测的就是真实链路），而 `:22` 等普通端口会走代理组（测的是「VPS 是否活着」）——reality 端口超时 + `:22` 通 = 端口被墙而非 VPS 宕机。修法：doh 组过滤正则改为 `hysteria2|reality`，hy2 立即接管承载；根治需在 VPS 侧换 reality 端口/传输。同时建议加自建域名直连解析行（`DAED_DNS_SELF_DOMAINS`，见 README「节点去 DNS 依赖」第 3 项），避免 doh 组全灭时连坐节点域名解析。
 
 改完分组/规则后用 `/etc/init.d/daed restart` 完整重启（daed UI 里的停止再启动可能只拉起面板、核心不加载）。
 

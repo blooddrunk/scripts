@@ -175,6 +175,7 @@ sh /tmp/odd.sh install --install-missing --restart-daed
 | `DAED_DNS_CN_URL` | `https://223.5.5.5/dns-query` | 中国域名（geosite:cn）使用的 DoH（IP 形式） |
 | `DAED_DNS_FALLBACK_URL` | `https://1.1.1.1/dns-query` | 其余域名使用的 DoH（IP 形式；需配合 Routing 中 `dip(...) -> <DoH 专用组>` 钉住规则从节点出口，直连国内会被干扰，且钉住组要跨 VPS） |
 | `DAED_DNS_IPVERSION_PREFER` | `4` | daed DNS 遇到同时存在 A/AAAA 的域名时仅响应 A；留空则省略该设置并允许 IPv6 |
+| `DAED_DNS_SELF_DOMAINS` | `example.top` | 自建域名后缀（节点入口/Headscale 等，空格分隔）：生成 `qname(suffix: …) -> alidns` 直连解析行，避免 fallback DoH 承载组全灭时连坐节点域名解析；留空不生成 |
 | `DAED_GROUP_PROXY` | `proxy` | 普通代理组名，**必须与 daed 中实际组名一致** |
 | `DAED_GROUP_PREMIUM` | `premium` | 高级代理组名，同上 |
 | `NODE_ENDPOINTS` | 占位符 | **重点配置**。格式 `IP:协议:端口`，空格分隔；支持 IPv6（如 `2001:db8::1:tcp:443`）。只放行节点入口端口，不要对整台 VPS `/32` must_direct |
@@ -194,7 +195,7 @@ daed 域名形式 DoH ──要解析──▶ dnsmasq ──▶ https-dns-proxy
 
 实测（2026-08 网关策略丢包事件）：节点拨号风暴把 daed 用户态转发卡死后，域名形式上游与 https-dns-proxy 一起失效，表现为「国内网站也打不开」；把上游改为 `https://223.5.5.5/dns-query` 后 daed 用自带 mark 的 socket 直接拨号、不再依赖解析链路，故障期间国内 DNS 保持可用。AliDNS 与 Cloudflare 的证书均包含对应 IP 的 SAN，`https://223.5.5.5/dns-query` / `https://1.1.1.1/dns-query` 合法可用。
 
-代价与注意：失去上游域名多 IP 容灾（对 223.5.5.5/1.1.1.1 这类 anycast 可忽略）；`1.1.1.1:443` 直连国内会被干扰，**必须**保留 Routing 中 `dip(1.1.1.1/32, 1.0.0.1/32, ...) -> <DoH 专用组>` 钉住规则，且该组要**跨 VPS**（见「fallback DoH 上游固定走 Reality 节点」）。
+代价与注意：失去上游域名多 IP 容灾（对 223.5.5.5/1.1.1.1 这类 anycast 可忽略）；`1.1.1.1:443` 直连国内会被干扰，**必须**保留 Routing 中 `dip(1.1.1.1/32, 1.0.0.1/32, ...) -> <DoH 专用组>` 钉住规则，且该组要**跨 VPS + 协议多样**（见「fallback DoH 上游钉到 doh 专用组」）。
 
 ### 其他
 
@@ -288,11 +289,15 @@ function operator(proxies) {
 
 只做第 1 项即可消除绝大部分连坐风险；第 2 项适合追求「DNS 全挂也不影响节点拨号」的场景。
 
-### fallback DoH 上游固定走 Reality 节点（可选加固）
+**3. DNS 分流：自建域名直连解析（轻量，2026-11-02 实战固化）**
+
+在 daed DNS 中加一条 `qname(suffix: <自建域名后缀>) -> alidns`（脚本变量 `DAED_DNS_SELF_DOMAINS`，重跑 `install` 会自动进生成的 DNS 片段）。节点/Headscale 域名（如 `*.haoqi90.top`）不在 `geosite:cn`，会走 fallback DoH——而 fallback DoH 恰恰钉在 doh 承载组上：该组全灭时**节点域名解析也跟着死**（实测日志里 `hs-nosla.haoqi90.top` 的 DoH 转发失败），形成「节点解析依赖代理、代理恢复依赖节点」的死锁。自建域名不涉污染，直连 alidns 解析即可解开。
+
+### fallback DoH 上游钉到 doh 专用组（可选加固）
 
 **背景**：daed 自身对 fallback DoH 上游（如 cloudflare-dns.com）的查询也会被 dae 按 Routing 分流，通常命中 `fallback: proxy` 从节点出口发出——这也是国外域名 DNS 答案不被污染的原因。代价是 fallback DNS 的可用性 = 所选节点的可用性：当分组策略（如 `min_moving_avg`）选中 Hysteria2 节点、而其 UDP/QUIC 隧道受 QoS 抖动时，DoH 会跟着间歇失败（日志特征：`DNS forward to upstream failed dialer=xx-hysteria2 ... connect error: http3: ...`，该 `http3` 报错来自 Hysteria2 隧道层而非 DoH3）。
 
-**做法**：在 `fallback: proxy` 之前，把发往 DoH 上游的流量指向一个**专用 DoH 承载组**（建议：跨 VPS 的 Reality/TCP 节点集合，下例命名为 `doh`）。支持 IP 与域名两种匹配写法，推荐**双写互为补充**：
+**做法**：在 `fallback: proxy` 之前，把发往 DoH 上游的流量指向一个**专用 DoH 承载组**（下例命名为 `doh`；成员要求见下方「前提与取舍」）。支持 IP 与域名两种匹配写法，推荐**双写互为补充**：
 
 ```text
 # dip 打底：fallback DoH 默认上游 1.1.1.1/1.0.0.1（IP 形式直连无需解析），
@@ -313,10 +318,10 @@ domain(suffix: cloudflare-dns.com) -> doh
 
 背景知识：dae 的 `domain()` 域名来源有两个——daed 处理过的 DNS 应答（IP→域名回溯）与 SNI 嗅探。对「daed 自身的 DoH 上游」这条流量，前者不适用（`cloudflare-dns.com` 由 daed 内部引导解析、未经客户端查询，不进 IP→域名缓存），只能依赖后者；这就是推荐 `dip` 打底、`domain` 补充的原因。
 
-前提与取舍（2026-10-30 实战修订，原「必须纯 Reality/TCP」降级为建议）：
+前提与取舍（2026-10-30 引入跨 VPS 硬要求；2026-11-02 再修订：协议多样性同为硬要求）：
 
-1. **钉住组必须跨 VPS（硬要求，比协议选择更重要）**。DoH 钉住组的可用性 = 全部国外域名解析的可用性：组内节点若同属一台 VPS（哪怕同时有 Reality + Hysteria2 两种入口，共享同一入口 IP），VPS 抖动时整组全灭——日志特征 `Group has no dialer alive group=xxx` → `no proper dialer for DNS upstream` → 所有国外域名 SERVFAIL，而 `proxy` 等其他分组可能一切正常，表现为「分组里明明有可用节点，外网却全挂」。
-2. **协议以 Reality/TCP 为宜（建议，非硬性）**。DoH 查询是极小的请求/响应流量，看重稳定而非吞吐：Hysteria2（UDP/QUIC + Brutal）的抗丢包吞吐优势帮不上小包交互，反而会把 UDP QoS 抖动传导给 DoH（`http3:` 报错即来自 hy2 隧道层），且低延迟的 hy2 常被 `min` 策略优先选中、变成常态承载。
+1. **钉住组必须跨 VPS（硬要求）**。DoH 钉住组的可用性 = 全部国外域名解析的可用性：组内节点若同属一台 VPS（哪怕同时有 Reality + Hysteria2 两种入口，共享同一入口 IP），VPS 抖动时整组全灭——日志特征 `Group has no dialer alive group=xxx` → `no proper dialer for DNS upstream` → 所有国外域名 SERVFAIL，而 `proxy` 等其他分组可能一切正常，表现为「分组里明明有可用节点，外网却全挂」。
+2. **钉住组必须协议多样（2026-11-02 起硬要求，原「建议纯 Reality/TCP」作废）**。跨 VPS 只防「单 VPS 故障」，防不了**协议级/端口级封锁**：2026-11-02 实战中三台不同 VPS 的 Reality 端口同时被墙（TCP 直连超时、VPS 本身存活、同 VPS 的 Hysteria2 正常），`reality` 过滤的跨 VPS doh 组照样整组全灭、全部国外域名 SERVFAIL 长时间持续。修法即把过滤正则改为 `hysteria2|reality`。Reality/TCP 仍是 DoH 小包交互的**优选**承载（看重稳定而非吞吐：Hysteria2 的 UDP QoS 抖动会传导给 DoH，`http3:` 报错即来自 hy2 隧道层，且低延迟的 hy2 常被 `min` 系策略选中变成常态承载），但**不能是唯一**——reality 被封时 hy2 自动接管，恢复后若延迟更低自动回归。
 3. **Hysteria2 的真正用武之地是大流量承载分组**（如 `proxy`）：丢包高/被限速的线路上吞吐通常优于 TCP 系代理，也避免了 TCP-in-TCP 恶化。按角色分工即可，不必全组追求纯 Reality。
 4. 只有一台 "premium" 线路 VPS 时：`premium` 组保留该 VPS 全部节点（hy2 + reality 协议多样性反而是优点），继续服务**按出口质量选路**的规则（anthropic/paypal 等）；另建跨 VPS 的 `doh` 组承载上面两条 DoH 规则。规则只影响发往 DoH 专用地址/带该 SNI 的流量，不影响其他 Cloudflare 服务。
 
@@ -401,13 +406,13 @@ tailscale netcheck    # tokyo/nosla 延迟应明显下降(经本机出口节点)
 daed 的配置保存在 `/etc/daed/wing.db`（SQLite 数据库）。按约定**本脚本绝不直接写库**，只生成片段并做只读检查；分组、全局/节点检测、DNS/Routing 都需要在 GUI 中手工完成一次（完整重放手册见 [docs/reapply-runbook.md](docs/reapply-runbook.md)）：
 
 1. 打开 daed 面板（LuCI → 服务 → daede，或独立面板地址）
-2. **配置 → 分组**：按下表创建（`doh` 组的设计依据见「fallback DoH 上游固定走 Reality 节点」；节点命名建议带协议，`doh` 组用 `reality` 正则过滤依赖它）
+2. **配置 → 分组**：按下表创建（`doh` 组的设计依据见「fallback DoH 上游钉到 doh 专用组」；节点命名建议带协议，`doh` 组用 `hysteria2|reality` 正则过滤依赖它）
 
    | 分组 | 成员 | 策略 | 用途 |
    |---|---|---|---|
    | `proxy`（同 `DAED_GROUP_PROXY`） | 主订阅全量（hy2+reality 混合无妨） | `min` | 日常代理 |
    | `premium`（同 `DAED_GROUP_PREMIUM`） | premium 订阅全量（单 VPS 保持独占） | `min` | 出口质量敏感规则 |
-   | `doh` | 每台 VPS 的订阅各加一个 + `reality` 过滤 | `min` | fallback DoH 跨 VPS 承载 |
+   | `doh` | 每台 VPS 的订阅各加一个 + `hysteria2\|reality` 过滤 | `min` | fallback DoH 承载：跨 VPS + 协议多样（两条硬要求） |
    | `tailscale-ctrl` / `tailscale-derp` | 出口在对应 VPS 本机的节点 | `min` | headscale 锁出口（可选） |
 
 3. **配置 → 全局 / 节点检测**：参照 `/root/openwrt-dns-daed/daed/daed-global-settings.txt` 逐项填写；`check_tolerance` 建议 50ms（0 容差会在几 ms 差距间反复换节点）

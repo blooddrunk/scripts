@@ -40,7 +40,7 @@
 # =============================================================================
 
 SCRIPT_NAME="openwrt-dns-daed"
-SCRIPT_VERSION="1.2.2"
+SCRIPT_VERSION="1.2.3"
 
 # -----------------------------------------------------------------------------
 # 0. 路径常量（部分可被环境变量覆盖，便于沙箱测试）
@@ -77,6 +77,10 @@ DAED_DNS_FALLBACK_URL="https://1.1.1.1/dns-query"
 # IPv4-only profile for networks whose proxy nodes do not reliably support IPv6.
 # Leave empty to omit the setting and allow daed to return IPv6 answers.
 DAED_DNS_IPVERSION_PREFER="4"
+# Self-hosted domain suffixes (node entry / Headscale, space separated): resolve
+# them via the CN DoH so a dead fallback-DoH group cannot cascade into node
+# resolution failures. Leave empty to omit the rule.
+DAED_DNS_SELF_DOMAINS=""
 DAED_GROUP_PROXY="proxy"
 DAED_GROUP_PREMIUM="premium"
 # daed global/node-check recommendations. These are rendered into a manual
@@ -420,10 +424,13 @@ HDP_LISTEN_PORT="5053"
 # ---- daed DNS（粘贴到 daed GUI 的 DNS 标签页）----
 DAED_DNS_CN_URL="https://223.5.5.5/dns-query"
 # 1.1.1.1:443 国内直连受干扰，务必保留 Routing 中 dip(1.1.1.1/32...) 钉住规则
-# （钉住组建议用跨 VPS 的 Reality/TCP 专用组，如 doh；不要钉在单台 VPS 的分组上）
+# （钉住组须跨 VPS 且协议多样（reality+hysteria2 混合），如 doh 组；不要钉在
+#  单台 VPS 的分组上，也不要只押 reality——协议级封锁会让 reality 全组团灭）
 DAED_DNS_FALLBACK_URL="https://1.1.1.1/dns-query"
 # 默认只返回 IPv4，适合 VPS 节点 IPv6 不稳定的网络；留空则允许 IPv6
 DAED_DNS_IPVERSION_PREFER="4"
+# 自建域名后缀（节点入口/Headscale 等，空格分隔）：直连解析防死锁，留空不生成
+DAED_DNS_SELF_DOMAINS="example.top"
 
 # ---- daed 全局/节点检测（仅生成 GUI 设置清单，不直接写 wing.db）----
 # 引导解析器留空即可使用 dae 默认值；如需显式指定请使用 IPv4 host:port
@@ -857,6 +864,17 @@ gen_daed_snippets() {
     else
         dns_extra=""
     fi
+    # 自建域名直连解析行（防死锁：doh 承载组全灭时不连坐节点域名解析）
+    daed_dns_self_line=""
+    if [ -n "$DAED_DNS_SELF_DOMAINS" ]; then
+        self_suffix_list="" d=""
+        for d in $DAED_DNS_SELF_DOMAINS; do
+            self_suffix_list="${self_suffix_list:+$self_suffix_list, }suffix: $d"
+        done
+        daed_dns_self_line="            # 自建域名(节点/Headscale)直连解析：fallback DoH 承载组全灭时不连坐
+            qname(${self_suffix_list}) -> alidns
+"
+    fi
     cat > "${SNIPPET_DIR}/daed-dns.dae" <<EOF
 # ============================================================
 # 由 ${SCRIPT_NAME} v${SCRIPT_VERSION} 生成于 $(date '+%Y-%m-%d %H:%M:%S')
@@ -864,8 +882,8 @@ gen_daed_snippets() {
 # 目标: 中国域名走 AliDNS DoH，其余走 Cloudflare DoH（全部加密、IP 直连，无 :53 明文）
 # IP 版本偏好: ${DAED_DNS_IPVERSION_PREFER:-未设置（允许 IPv6）}
 # 注意: 上游为 IP 形式时无需解析 DoH 域名；fallback(1.1.1.1) 需配合
-#       Routing 中 dip(...) 钉住规则（建议跨 VPS Reality 专用组，如 doh）
-#       从节点出口，直连国内会被干扰
+#       Routing 中 dip(...) 钉住规则（钉住组须跨 VPS 且协议多样
+#       （reality+hysteria2），如 doh 组）从节点出口，直连国内会被干扰
 # ============================================================
 dns {
 ${daed_dns_ipversion_line}    upstream {
@@ -876,7 +894,7 @@ ${daed_dns_ipversion_line}    upstream {
     routing {
         request {
             qname(geosite:cn) -> alidns
-            fallback: cloudflaredns
+${daed_dns_self_line}            fallback: cloudflaredns
         }
     }
 }

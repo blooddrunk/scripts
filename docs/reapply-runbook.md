@@ -62,7 +62,7 @@ sh /root/openwrt-dns-daed/openwrt-dns-daed.sh install
 
 ### 5.1 订阅与节点命名
 
-按 VPS 组织订阅（如 main / premium / JP / DE）。**节点命名建议带协议与线路**（`xx-reality-tcp-…`、`xx-hysteria2`）——第 5.2 步 `doh` 组用 `reality` 正则过滤节点，命名规范是前提。
+按 VPS 组织订阅（如 main / premium / JP / DE）。**节点命名建议带协议与线路**（`xx-reality-tcp-…`、`xx-hysteria2`）——第 5.2 步 `doh` 组用 `hysteria2|reality` 正则过滤节点，命名规范是前提。
 
 ### 5.2 分组（配置 → 分组）
 
@@ -70,7 +70,7 @@ sh /root/openwrt-dns-daed/openwrt-dns-daed.sh install
 |---|---|---|---|---|
 | `proxy` | 主订阅全量 | — | `min` | 日常代理（hy2+reality 混合无妨） |
 | `premium` | premium 订阅全量（单 VPS 时保持独占） | — | `min` | 出口质量敏感规则（anthropic/paypal/自建 Access） |
-| `doh` | **每台 VPS 的订阅各加一个** | `reality` | `min` | fallback DoH 专用承载：**跨 VPS、纯 Reality/TCP**（硬要求见 README「fallback DoH 上游固定走 Reality 节点」） |
+| `doh` | **每台 VPS 的订阅各加一个** | `hysteria2\|reality` | `min` | fallback DoH 专用承载：**跨 VPS + 协议多样**（两条硬要求，2026-11-02 修订：reality-only 会被协议级封锁团灭，见 README「fallback DoH 上游钉到 doh 专用组」） |
 | `tailscale-ctrl` | 出口在 headscale 控制面 VPS 本机的订阅 | — | `min` | 控制面锁出口 |
 | `tailscale-derp` | 出口在 DERP VPS 本机的订阅 | — | `min` | DERP 锁出口 |
 
@@ -92,7 +92,7 @@ DNS / Routing 标签页用生成片段**整体替换**保存，然后：
 ```sh
 sh /root/openwrt-dns-daed/openwrt-dns-daed.sh check          # 期望 0 FAIL
 grep -c "no proper dialer" /var/log/daed/daed.log             # 新窗口期应为 0
-grep "Group 'doh'" /var/log/daed/daed.log | tail              # 应列出跨 VPS 的 reality 节点及延迟
+grep "group=doh" /var/log/daed/daed.log | tail                # 应列出跨 VPS 的 hy2/reality 节点及延迟
 nslookup www.baidu.com 192.168.10.1 && nslookup www.google.com 192.168.10.1
 grep "Health check will only verify" /var/log/daed/daed.log | tail -1   # outbounds 应含 doh
 ```
@@ -124,7 +124,7 @@ grep "Health check will only verify" /var/log/daed/daed.log | tail -1   # outbou
 1. 备份三件套：`cp -a /etc/daed/wing.db* <备份目录>/`；
 2. `/etc/init.d/daed stop`；拉回 db+`-wal`+`-shm`，用 SQLite 工具改：
    - 新增分组：`INSERT INTO groups (id,name,policy,version,system_id) VALUES (…,'doh','min',1,1)`；
-   - 成员：`INSERT INTO group_subscriptions (group_id,subscription_id,name_filter_regex) VALUES (…,'reality')`；
+   - 成员：`INSERT INTO group_subscriptions (group_id,subscription_id,name_filter_regex) VALUES (…,'hysteria2|reality')`；
    - 规则文本：改 `routings.routing`（DoH 钉住行 `-> doh`）等，并 `version=version+1`；`dns.dns` / `configs.global` 同理（check_tolerance 在 `configs.global`）；
    - `PRAGMA wal_checkpoint(TRUNCATE)` 后 **`VACUUM`**（清历史行残影，否则脚本「主库含明文即明文」检查可能误报，见 [troubleshooting 情况 E](troubleshooting.md)）；
 3. 回传主库，**先删目标机 `-wal`/`-shm` 再覆盖**，`chmod 640`；
@@ -132,5 +132,5 @@ grep "Health check will only verify" /var/log/daed/daed.log | tail -1   # outbou
 
 ## 8. 相关文档
 
-- README：「fallback DoH 上游固定走 Reality 节点」（doh 组设计与 add_latency 结论）、「自建 Headscale 场景」、「追加自定义 Routing 规则」
+- README：「fallback DoH 上游钉到 doh 专用组」（doh 组设计与 add_latency 结论）、「自建 Headscale 场景」、「追加自定义 Routing 规则」
 - [troubleshooting](troubleshooting.md)：情况 D（回环）、E（明文残影/VACUUM）、F 附（DoH 经分组转发）、L（no proper dialer）
