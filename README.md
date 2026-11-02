@@ -369,12 +369,17 @@ dip(203.0.113.99/32) && l4proto(tcp) && dport(8443) -> must_direct
 - DERP Tokyo 中继绕行 CN→SJC→TYO，经中继的流量 ~680ms（本应 ~100ms）；
 - 控制面请求 ~1.4s（SJC→FRA 绕行）。
 
-**修法**：为两个控制域名各建一个**单节点分组**（分组策略随意，
-单节点即锁定出口），让流量"出口就在目标 VPS 本机"：
+**修法**：为两个控制域名各建一个**锁定出口的分组**，让流量"出口就在目标 VPS 本机"：
 
-1. daed GUI → 配置 → 分组：新建分组 `tailscale-ctrl`（仅含
-   `nosla-hysteria2`）、`tailscale-derp`（仅含 `bitsflow-hysteria2`，
-   订阅里出口在 bitsflow VPS 本机的节点）；
+1. daed GUI → 配置 → 分组：新建分组 `tailscale-ctrl`（对应 VPS 的订阅 +
+   `hysteria2` 过滤）、`tailscale-derp`（同理，出口在 DERP VPS 本机）。
+
+   **必须加 `hysteria2` 过滤（2026-11-02 实战教训）**：若按整订阅（hy2+reality）
+   建组，当 reality 节点处于「间歇被墙→急救探测复活」的翻动状态时，dae 的
+   `min` 系策略会被复活瞬间 **`min=0s` 的未测延迟**吸引切过去，控制面长轮询
+   （`PollNetMap: …/machine/map: context canceled`）随即超时——tailnet 节点
+   在控制面视角反复 offline/online，**子网路由被撤回**，经 tailnet 的管理通道
+   随之断续瘫痪。控制面/DERP 是长连接、看稳定性，只放 hysteria2 即可。
 2. `routing-extra.dae` 加两条（放在 CN 规则之前的插入点已由脚本保证）：
 
 ```text

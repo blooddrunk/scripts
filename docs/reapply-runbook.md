@@ -71,8 +71,8 @@ sh /root/openwrt-dns-daed/openwrt-dns-daed.sh install
 | `proxy` | 主订阅全量 | — | `min` | 日常代理（hy2+reality 混合无妨） |
 | `premium` | premium 订阅全量（单 VPS 时保持独占） | — | `min` | 出口质量敏感规则（anthropic/paypal/自建 Access） |
 | `doh` | **每台 VPS 的订阅各加一个** | `hysteria2\|reality` | `min` | fallback DoH 专用承载：**跨 VPS + 协议多样**（两条硬要求，2026-11-02 修订：reality-only 会被协议级封锁团灭，见 README「fallback DoH 上游钉到 doh 专用组」） |
-| `tailscale-ctrl` | 出口在 headscale 控制面 VPS 本机的订阅 | — | `min` | 控制面锁出口 |
-| `tailscale-derp` | 出口在 DERP VPS 本机的订阅 | — | `min` | DERP 锁出口 |
+| `tailscale-ctrl` | 出口在 headscale 控制面 VPS 本机的订阅 | `hysteria2` | `min` | 控制面锁出口（排除翻动 reality 被 min=0s 抢占，2026-11-02） |
+| `tailscale-derp` | 出口在 DERP VPS 本机的订阅 | `hysteria2` | `min` | DERP 锁出口（同上） |
 
 ### 5.3 全局（配置 → 全局）
 
@@ -99,7 +99,9 @@ grep "Health check will only verify" /var/log/daed/daed.log | tail -1   # outbou
 
 ## 7. 附录：无 GUI 时的直改库流程（高级，慎用）
 
-> **先检查管理通道是否依赖 daed（2026-10-30 实战教训）**：若这台路由器只能经 tailnet/自建 DERP 访问，而 DERP 流量本身又由 daed 分组承载（`tailscale-ctrl` 等），则**停 daed = 自断管理通道**。在这种设备上绝不能用「SSH 里跑一长串 stop→改→start」的裸流程——连接中途断开就会把 daed 永远停在 stopped，只能现场断电。安全做法：把整个变更写成一个**自愈式一次性脚本**放到路由器上，用 `nohup` 脱离会话执行；并在动手前预置一条兜底延时启动（见下）。
+> **先检查管理通道是否依赖 daed（2026-10-30 实战教训）**：若这台路由器只能经 tailnet/自建 DERP 访问，而 DERP 流量本身又由 daed 分组承载（`tailscale-ctrl` 等），则**停 daed = 自断管理通道**。在这种设备上绝不能用「SSH 里跑一长串 stop→改→start」的裸流程——连接中途断开就会把 daed 永远停在 stopped，只能现场断电。安全做法：把整个变更写成一个**自愈式一次性脚本**放到路由器上，脱离会话执行；并在动手前预置一条兜底延时启动（见下）。
+>
+> **注意 `nohup` 并不总在（2026-11-02 实战）**：Kwrt 部分构建的 busybox 不带 `nohup` applet，模板直接报 `nohup: command not found`、脚本静默未执行。用 `setsid` 等价替代（先 `command -v setsid` 确认），并务必 `</dev/null` 重定向 stdin。下方模板已改为 setsid 写法（有 nohup 的设备两者等价）。
 
 远程自动化或无法访问 GUI 时可直改 `wing.db`（本流程 2026-10-30 实战验证）。脚本本身仍不写库，此为人工操作：
 
@@ -116,9 +118,9 @@ grep "Health check will only verify" /var/log/daed/daed.log | tail -1   # outbou
    fi
    /etc/init.d/daed restart
    EOS
-   # 兜底：即使主脚本意外中断，90 秒后也强制拉起 daed
-   nohup sh -c 'sleep 90; /etc/init.d/daed start' >/dev/null 2>&1 &
-   nohup sh /tmp/fix-daed.sh >/tmp/fix-daed.log 2>&1 &
+   # 兜底：即使主脚本意外中断，120 秒后也强制拉起 daed
+   setsid sh -c 'sleep 120; /etc/init.d/daed start' </dev/null >/dev/null 2>&1 &
+   setsid sh /tmp/fix-daed.sh </dev/null >/tmp/fix-daed.log 2>&1 &
    ```
 
 1. 备份三件套：`cp -a /etc/daed/wing.db* <备份目录>/`；

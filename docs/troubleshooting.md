@@ -246,3 +246,17 @@ grep -E "Group has no dialer alive|Marking dialer as unavailable" /var/log/daed/
 
 改完分组/规则后用 `/etc/init.d/daed restart` 完整重启（daed UI 里的停止再启动可能只拉起面板、核心不加载）。
 
+## 情况 M：tailnet 节点反复 offline、子网路由时断时续（管理通道跟着瘫）
+
+```text
+tailscaled: control: map response long-poll timed out!
+tailscaled: Received error: PollNetMap: Post "https://hs-<vps>.haoqi90.top/machine/map": ...
+daed.log:   Group re-selects _new_dialer=<vps>-reality-tcp-… _old_dialer=<vps>-hysteria2 group=tailscale-ctrl min=0s
+```
+
+含义：headscale 控制面/DERP 分组（`tailscale-ctrl` / `tailscale-derp`）按整订阅（hy2+reality）建组，而 reality 节点处于「间歇被墙→急救探测复活」的翻动状态时，dae 的 `min` 系策略会被复活瞬间 **`min=0s` 的未测延迟**吸引切过去——控制面长轮询随即超时，tailnet 节点在控制面视角反复 offline/online，**子网路由被撤回**，经 tailnet 的管理通道随之时断时续（2026-11-02 实战，与情况 L 根因 4 是同一封锁事件的另一种表现）。
+
+排查：`tailscale status` 自身行显示 `offline` 翻动 + 上述 `min=0s` 选点日志。
+
+修法：`tailscale-ctrl` / `tailscale-derp` 组加 `hysteria2` 过滤（出口仍锁对应 VPS）。控制面/DERP 是长连接、看稳定性不看吞吐，见 README「自建 Headscale 场景」。直改库：`UPDATE group_subscriptions SET name_filter_regex='hysteria2' WHERE group_id IN (<ctrl>,<derp>)`。
+
