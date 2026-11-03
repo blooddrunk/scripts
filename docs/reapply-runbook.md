@@ -132,7 +132,16 @@ grep "Health check will only verify" /var/log/daed/daed.log | tail -1   # outbou
 3. 回传主库，**先删目标机 `-wal`/`-shm` 再覆盖**，`chmod 640`；
 4. `/etc/init.d/daed start`，按第 6 节验证（分组/数据完整性在覆盖前用只读查询自证）。
 
-## 8. 相关文档
+## 8. 附录：MTU 黑洞加固项（脚本不管，重置/重装后必须手工恢复）
 
-- README：「fallback DoH 上游钉到 doh 专用组」（doh 组设计与 add_latency 结论）、「自建 Headscale 场景」、「追加自定义 Routing 规则」
-- [troubleshooting](troubleshooting.md)：情况 D（回环）、E（明文残影/VACUUM）、F 附（DoH 经分组转发）、L（no proper dialer）
+上游隧道对国际方向 :443 实测 MTU≈1280，超尺寸段静默丢弃（完整分析见 [troubleshooting 情况 N](troubleshooting.md)）。重放本手册**不会**覆盖这两项，但路由器重置/重装会丢，恢复清单：
+
+1. `/etc/nftables.d/20-mss-clamp.nft` —— fw4 include，output/forward 链把 SYN 上 `MSS>1240` 钳到 1240（模板见 README「上游 MTU 黑洞加固」）；
+2. `uci` 的三条 `vpsmtu*` /32 mtu 1280 主机路由（nosla / bitsflow / lightlayer 三台 VPS）。
+
+验收：路由器本机 `curl https://relay.haoqi90.top/` 1s 内返回 401/200，daed 日志无 `failed to dial <VPS>:443`。
+
+## 9. 相关文档
+
+- README：「fallback DoH 上游钉到 doh 专用组」（doh 组设计与 add_latency 结论）、「自建 Headscale 场景」、「追加自定义 Routing 规则」、「上游 MTU 黑洞加固」
+- [troubleshooting](troubleshooting.md)：情况 D（回环）、E（明文残影/VACUUM）、F 附（DoH 经分组转发）、L（no proper dialer）、N（MTU 黑洞）

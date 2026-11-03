@@ -404,6 +404,51 @@ tailscale netcheck    # tokyo/nosla 延迟应明显下降(经本机出口节点)
 > 核心未加载（无任何 eBPF/Routing 日志、代理全断），此时用
 > `/etc/init.d/daed restart` 完整重启。
 
+### 上游 MTU 黑洞加固：主机路由 MTU + MSS 钳制（2026-11-03 实战）
+
+上游网关对国际方向走隧道（:443 实测 MTU≈1280、其它端口≈1492），**超尺寸段静默丢弃且不回 ICMP**。WAN 口 MTU 1500 让本机与客户端按 MSS 1460 切段 → 直连自建域名的 TLS 在 ClientHello 后永远卡死，reality 节点也被连坐团灭（完整分析见 [troubleshooting 情况 N](docs/troubleshooting.md)）。两项加固缺一不可：
+
+```sh
+# ① 三台自建 VPS 各加一条 /32 mtu 1280 主机路由
+#    （本机 TCP 的 MSS 由路由 MTU 决定 → 自动 1240；QUIC/hy2 走默认路由不受影响）
+n=0
+for ip in 82.139.215.223 216.23.86.169 154.82.20.241; do
+  n=$((n+1))
+  uci set network.vpsmtu$n='route'
+  uci set network.vpsmtu$n.interface='wan'
+  uci set network.vpsmtu$n.target="$ip/32"
+  uci set network.vpsmtu$n.gateway='172.17.48.1'    # ← 换成本机 WAN 网关
+  uci set network.vpsmtu$n.mtu='1280'
+done
+uci commit network
+for ip in 82.139.215.223 216.23.86.169 154.82.20.241; do
+  ip route replace "$ip/32" via 172.17.48.1 dev eth1 mtu 1280   # ← 立即生效，网关/接口按实际
+done
+```
+
+```sh
+# ② fw4 include：SYN 上把 MSS>1240 钳到 1240（管「服务器→客户端」方向的分段）
+cat > /etc/nftables.d/20-mss-clamp.nft <<'EOF'
+chain mss_clamp_output {
+    type filter hook output priority mangle; policy accept;
+    oifname "eth1" tcp flags syn tcp option maxseg size > 1240 tcp option maxseg size set 1240
+}
+chain mss_clamp_forward {
+    type filter hook forward priority mangle; policy accept;
+    oifname "eth1" tcp flags syn tcp option maxseg size > 1240 tcp option maxseg size set 1240
+}
+EOF
+# 即时生效（不想 fw4 restart 闪断，用 runtime add 等价加载）：
+nft add chain inet fw4 mss_clamp_output '{ type filter hook output priority mangle; policy accept; }'
+nft add rule  inet fw4 mss_clamp_output 'oifname "eth1" tcp flags syn tcp option maxseg size > 1240 tcp option maxseg size set 1240'
+nft add chain inet fw4 mss_clamp_forward '{ type filter hook forward priority mangle; policy accept; }'
+nft add rule  inet fw4 mss_clamp_forward 'oifname "eth1" tcp flags syn tcp option maxseg size > 1240 tcp option maxseg size set 1240'
+```
+
+验收：`curl -sk -o /dev/null -w '%{http_code} %{time_total}s\n' https://relay.haoqi90.top/` 路由器本机与 LAN 客户端都应在 1s 内返回；daed 日志不再出现 `failed to dial <VPS>:443`，被连坐的 reality dialer 在一个检测周期内 `NOT ALIVE → ALIVE` 集体复活。
+
+> **为什么不是别的方案**：`TCPMSS` 钳制只重写 SYN 选项、管不住本机发送栈（本机必须靠主机路由 MTU）；把 WAN 口 MTU 全局降到 1280 会杀死 hysteria2 的 QUIC（实测 hy2 dialer 全灭、代理组下线）。组合拳 = TCP 走 /32 小 MTU、UDP/QUIC 走默认 1500。
+
 ---
 
 ## daed 的手动步骤（GUI）
@@ -584,6 +629,9 @@ sh /root/openwrt-dns-daed/openwrt-dns-daed.sh clean --purge   # 全部删除
 
 **Q: 我的宽带有 IPv6，但 VPS 节点的 IPv6 不稳定，应该怎么办？**
 默认生成的 daed DNS 片段包含 `ipversion_prefer: 4`，并且全局节点检测清单只保留 IPv4 检测。注意：该设置只影响 daed 处理的 DNS，且实测部分版本并不会过滤 AAAA；脚本的 LAN `dnsmasq → https-dns-proxy` 链路返回的 AAAA 也需单独处理。最彻底的做法是 `DISABLE_IPV6="1"` 整机关闭 IPv6。详见 [troubleshooting 情况 F](docs/troubleshooting.md)。
+
+**Q: 直连自建域名（或任何站点）能握手、小包都通，但页面/大文件永远加载不出？**
+上游 MTU 黑洞：上游隧道静默丢弃超尺寸段，ClientHello 第一段就过不去。WSL2 客户端「碰巧能通」是 NAT 后天然 MSS 1240 的假象，别被骗。判定与修法（/32 mtu 1280 主机路由 + fw4 MSS 钳制）见 [troubleshooting 情况 N](docs/troubleshooting.md) 与 README「上游 MTU 黑洞加固」。
 
 更多见 [docs/troubleshooting.md](docs/troubleshooting.md)。
 

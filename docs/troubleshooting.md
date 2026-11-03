@@ -260,3 +260,39 @@ daed.log:   Group re-selects _new_dialer=<vps>-reality-tcp-… _old_dialer=<vps>
 
 修法：`tailscale-ctrl` / `tailscale-derp` 组加 `hysteria2` 过滤（出口仍锁对应 VPS）。控制面/DERP 是长连接、看稳定性不看吞吐，见 README「自建 Headscale 场景」。直改库：`UPDATE group_subscriptions SET name_filter_regex='hysteria2' WHERE group_id IN (<ctrl>,<derp>)`。
 
+## 情况 N：自建域名直连「能握手、永远加载不出」——上游 MTU 黑洞大段静默丢弃
+
+```text
+curl https://relay.haoqi90.top  → code=000 满超时（但 ping 通、TCP 握手成功、DNS 正常）
+daed.log:  WARN handleConn: failed to dial 82.139.215.223:443: context deadline exceeded
+daed.log:  WARN Marking dialer as unavailable due to persistent proxy IP failures dialer=…reality…
+tcpdump:   本机.x > VPS.443: Flags [.], seq 1:1445, length 1444   ← 同一段无限重传
+           VPS.443 > 本机.x: …, sack 1 {1445:1569}                ← 服务器只收到后半段
+```
+
+含义：**上游网关对国际方向走隧道，隧道 MTU 小于 WAN 口声称的 1500**（2026-11-03 实战：:443 方向实测 ≈1280，其它端口 ≈1492），超过隧道 MTU 的段被**静默丢弃、不回 ICMP need-frag**。本机与 LAN 客户端按 MSS 1460 切段，TLS ClientHello 的第一个 1460B 段永远过不去——于是「握手成功、响应永远等不到」。tcpdump 的 SACK 特征（只确认后半段）是铁证。
+
+连坐面极大，同一根因的多种表现：
+
+- 直连自建域名的 HTTPS 全部卡死（本机与真机客户端；WSL2 客户端「碰巧能通」是因为 NAT 后天然 MSS 1240，别被它骗了）；
+- reality 节点的 TCP 拨号大段同样被丢 → `Marking dialer as unavailable … proxy IP failures` 团灭 → doh 组全灭 → 国外域名 SERVFAIL（即情况 L 的又一根因）；
+- 任何「小包都通、大文件必卡」的直连下载。
+
+快速判定（路由器上）：
+
+```sh
+# ① 对照测试：WSL2（MSS 1240）通、路由器本机/手机（MSS 1460）不通 → 基本坐实
+# ② 抓包看 SACK 特征（比 ping -M do 可靠——上游连 ICMP DF 也可能一起黑）
+tcpdump -i eth1 -nn host <VPS-IP> and tcp port 443
+```
+
+修法（两项缺一不可；详见 README「上游 MTU 黑洞加固」）：
+
+1. **自建 VPS 各加一条 `/32 mtu 1280` 主机路由**——本机 TCP 的 MSS 由路由 MTU 决定（自动变 1240），QUIC/hy2 走默认路由不受影响；
+2. **fw4 include 做 MSS 钳制**（`/etc/nftables.d/20-mss-clamp.nft`）——管转发方向「服务器→客户端」的分段跟随我们声明的 MSS。
+
+两个坑（2026-11-03 都踩过）：
+
+- `TCPMSS` 钳制只重写 SYN 里的选项，**对本机 socket 的发送栈无效**（本机照按接口 MTU 切段）——本机流量必须靠主机路由 MTU 解决；
+- **不要把 WAN 口 MTU 全局降到 1280**：会杀死 hysteria2 的 QUIC（实测 daed 所有 hy2 dialer 瘫痪、代理组整体下线）——UDP/QUIC 必须留在 MTU 1500 的默认路由上。
+
