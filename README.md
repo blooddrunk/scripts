@@ -418,7 +418,7 @@ curl -sI 'https://<后端域名>/<路径标识>/download/<订阅名>' | grep -i 
 
 ### 部署保热 cron
 
-脚本 [configs/keepwarm.sh](./configs/keepwarm.sh) 自带 install / status / uninstall 子命令，会自我安装；个人配置（下载地址前缀、保热路径列表、缓存目录）全部放在外部 conf 文件里，脚本本身不含隐私信息、直接入库：
+脚本 [configs/keepwarm.sh](./configs/keepwarm.sh) 自带 install / status / purge-cache / uninstall 子命令，会自我安装；个人配置（下载地址前缀、保热路径列表、缓存目录）全部放在外部 conf 文件里，脚本本身不含隐私信息、直接入库：
 
 ```bash
 cd configs
@@ -434,6 +434,7 @@ sh keepwarm.sh status                   # 查看 conf / cron 条目 / 已安装�
 #### 更新保热 URL 与 cron 频率
 
 - **增删订阅（URL 列表）**：直接编辑已安装的 `/usr/local/etc/substore-keepwarm.conf`，下次运行即生效，无需重新安装；或改仓库 `configs/keepwarm.conf` 后执行 `sh keepwarm.sh install` 覆盖安装。`sh keepwarm.sh run` 可立即手动预热一遍验证新 URL。
+- **下线订阅或某个 `profile` 候选池时务必同步移除对应保热项**：否则反代 `proxy_cache_background_update` 每次整点仍会先把旧的 `200` 缓存回给 `curl`（并续期 `inactive=7d`），同时在后台回源触发 Sub-Store 空节点 `500` 及推送告警。建议改完执行 `sh keepwarm.sh install && sh keepwarm.sh purge-cache && sh keepwarm.sh run` 一步换新。
 - **调整频率**：`sh keepwarm.sh install '*/30 * * * *'`。install 是幂等的：总会用当前脚本与 conf 覆盖安装，并替换引用该安装路径的旧 cron 条目（表达式记得加引号，避免 `*` 被 shell 展开；脚本会校验必须是「分 时 日 月 周」5 个字段）。
 
 #### 清理副作用（卸载）
@@ -441,14 +442,15 @@ sh keepwarm.sh status                   # 查看 conf / cron 条目 / 已安装�
 保热的副作用共四处：crontab 条目、`/usr/local/bin/substore-keepwarm.sh`、`/usr/local/etc/substore-keepwarm.conf`、反代缓存目录中被预热的条目。
 
 ```bash
+sh keepwarm.sh purge-cache              # 仅清空反代缓存目录（保留 cron 与已安装文件）
 sh keepwarm.sh uninstall                # 移除 cron 条目 + 删除已安装脚本与 conf
 sh keepwarm.sh uninstall --purge-cache  # 同时清空反代缓存目录（conf 里的 CACHE_DIR）
 ```
 
-- `--purge-cache` 从 conf 读取 `CACHE_DIR`（宿主机路径；1Panel openresty 为 `/opt/1panel/www/cache/substore`）。直接删除缓存文件即可，nginx 无需 reload，缺失文件按 MISS 处理。
+- `purge-cache` / `--purge-cache` 从 conf 读取 `CACHE_DIR`（宿主机路径；1Panel openresty 为 `/opt/1panel/www/cache/substore`）。直接删除缓存文件即可，nginx 无需 reload，缺失文件按 MISS 处理。
 - 按旧文档手动 `cp` + `crontab -e` 安装的同样这样清理：条目按安装路径匹配，`/usr/local/bin/substore-keepwarm.sh` 的旧条目会被一并移除。
 - Sub-Store 后端的探测缓存 / 规则缓存按各自 TTL 自行过期，无需（也无法从外部）清理。
-- 若只想清缓存、保留保热，清完执行 `sh keepwarm.sh run` 立即重新预热，避免下次拉取冷启动。
+- 若只想清缓存、保留保热，执行 `sh keepwarm.sh purge-cache && sh keepwarm.sh run` 立即重新预热，避免下次拉取冷启动。
 
 ## Troubleshooting
 
@@ -504,6 +506,14 @@ daed 单次尝试硬编码 5 秒超时且不可配置。按 [VPS 生产部署](#
 - 保热脚本的 URL 列表没有覆盖该下载地址：不同 `$options` 变体是独立缓存 key，需逐个列出。
 - 缓存目录不存在或无写权限：检查 nginx error log。
 
+### Telegram 每小时整点收到「下载组合订阅错误：xxx 中不含有效节点」
+
+典型现象：配置了 `SUB_STORE_PUSH_SERVICE` 后，每个整点（`XX:00`）准时收到组合订阅空节点告警，但外部客户端一切正常、保热脚本自身也不报错。
+
+原因：某个上游订阅或 `profile` 候选池已下线，但 `/usr/local/etc/substore-keepwarm.conf` 仍保留着对应的 `$options` 变体（例如 `profile=premium`）。由于反代开启了 `proxy_cache_background_update on` 与 `proxy_cache_use_stale ... http_500`，每小时 `curl` 请求时反代直接返回下线前留下的旧 `200` 缓存（同时重置 `inactive=7d` 淘汰计时器，使旧缓存永不过期），而后台异步回源 Sub-Store 因过滤后剩余 0 个节点返回 `500` 并触发推送。
+
+处理：核对反代 `access.log` 中非 `curl` 客户端实际拉取的 `/download/` 列表，从 `keepwarm.conf` 移除已废弃条目并补齐新变体，再执行 `sh configs/keepwarm.sh install && sh configs/keepwarm.sh purge-cache && sh configs/keepwarm.sh run`。
+
 ### 通过 `$options` 传参对探测脚本不生效
 
 `google-region-probe.js` 只认脚本 URL `#` 后的固定参数，不支持下载链接 `$options` 覆盖；探测相关参数请直接写在操作配置里。
@@ -519,7 +529,7 @@ daed 单次尝试硬编码 5 秒超时且不可配置。按 [VPS 生产部署](#
 ├── README.md
 ├── configs/
 │   ├── README.md                        # 本目录说明
-│   ├── keepwarm.sh                      # 缓存保热脚本，含 install/status/uninstall 子命令
+│   ├── keepwarm.sh                      # 缓存保热脚本，含 install/status/purge-cache/uninstall 子命令
 │   ├── keepwarm.example.conf            # 保热配置模板（实际的 keepwarm.conf 不入库）
 │   └── openresty-substore-cache.conf    # 反代下载缓存模板
 ├── examples/

@@ -20,6 +20,7 @@
 #   sh keepwarm.sh install [cron表达式]       安装/更新：复制脚本与 conf 到安装位置，
 #                                             写入（或替换）cron 条目，缺省 0 * * * *
 #   sh keepwarm.sh status                     查看 conf / cron 条目 / 已安装文件 / 缓存目录
+#   sh keepwarm.sh purge-cache                仅清空反代缓存目录（保留 cron 与已安装文件）
 #   sh keepwarm.sh uninstall [--purge-cache]  清理副作用：cron 条目 + 已安装文件；
 #                                             --purge-cache 同时清空反代缓存目录
 #
@@ -138,6 +139,17 @@ do_status() {
   fi
 }
 
+do_purge_cache() {
+  load_conf
+  if [ -n "$CACHE_DIR" ] && [ -d "$CACHE_DIR" ]; then
+    # ${CACHE_DIR:?} 保证变量非空，避免误删 /*
+    rm -rf -- "${CACHE_DIR:?}"/* 2>/dev/null
+    echo "已清空 $CACHE_DIR（直接删缓存文件即可，nginx 无需 reload）"
+  else
+    echo "conf 未配置 CACHE_DIR 或目录不存在，跳过缓存清理；也可手动清空缓存目录"
+  fi
+}
+
 do_uninstall() {
   if crontab -l 2>/dev/null | grep -q -F "$INSTALL_PATH"; then
     crontab -l 2>/dev/null | grep -v -F "$INSTALL_PATH" | crontab -
@@ -153,14 +165,7 @@ do_uninstall() {
     fi
   done
   if [ "$1" = "--purge-cache" ]; then
-    load_conf
-    if [ -n "$CACHE_DIR" ] && [ -d "$CACHE_DIR" ]; then
-      # ${CACHE_DIR:?} 保证变量非空，避免误删 /*
-      rm -rf -- "${CACHE_DIR:?}"/* 2>/dev/null
-      echo "已清空 $CACHE_DIR（直接删缓存文件即可，nginx 无需 reload）"
-    else
-      echo "conf 未配置 CACHE_DIR 或目录不存在，跳过缓存清理；也可手动清空缓存目录"
-    fi
+    do_purge_cache
   fi
   echo "完成。Sub-Store 后端的探测/规则缓存按各自 TTL 自行过期，无需清理。"
 }
@@ -171,6 +176,7 @@ usage() {
   （无命令）/ run              立即保热一次（cron 调用时的默认行为）
   install [cron表达式]         安装/更新脚本与 conf，写入 cron 条目（默认 0 * * * *）
   status                       查看 conf / cron 条目 / 已安装文件 / 缓存目录
+  purge-cache                  仅清空反代缓存目录（保留 cron 与已安装文件）
   uninstall [--purge-cache]    清理副作用（--purge-cache 同时清空反代缓存目录）
 配置文件查找顺序：KEEPWARM_CONF 环境变量 → 脚本同目录 keepwarm.conf →
 /usr/local/etc/substore-keepwarm.conf
@@ -178,10 +184,11 @@ EOF
 }
 
 case "${1:-run}" in
-  run)       warm ;;
-  install)   shift; do_install "$@" ;;
-  status)    do_status ;;
-  uninstall) shift; do_uninstall "$@" ;;
+  run)          warm ;;
+  install)      shift; do_install "$@" ;;
+  status)       do_status ;;
+  purge-cache)  do_purge_cache ;;
+  uninstall)    shift; do_uninstall "$@" ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 1 ;;
 esac
