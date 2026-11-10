@@ -17,6 +17,7 @@
   python3 lightlayer.py logout                 # 吊销 token 并清除本地缓存
 
 配置: 同目录 .env (可参考 .env.example), 真实环境变量优先于 .env 文件。
+认证: LIGHTLAYER_AUTH 或 --auth 参数, 可选 basic(默认)/auto/bearer, 详见 README。
 """
 
 from __future__ import annotations
@@ -44,6 +45,8 @@ ORDERS_LOG = CACHE_DIR / "orders.log"
 
 CYCLE_HELP = "m=月付, q=季付, s=半年付, a=年付, b=两年付, t=三年付"
 
+AUTH_MODES = ("basic", "bearer", "auto")
+
 
 class ApiError(RuntimeError):
     """API 返回非 2xx 或业务错误。"""
@@ -63,7 +66,7 @@ CONFIG_KEYS = (
     "LIGHTLAYER_USERNAME", "LIGHTLAYER_PASSWORD", "LIGHTLAYER_PRODUCT_ID",
     "LIGHTLAYER_CYCLE", "LIGHTLAYER_PAY_METHOD", "LIGHTLAYER_PROMOCODE",
     "LIGHTLAYER_DOMAIN", "LIGHTLAYER_AFF_ID", "LIGHTLAYER_CUSTOM",
-    "LIGHTLAYER_API_BASE",
+    "LIGHTLAYER_API_BASE", "LIGHTLAYER_AUTH",
 )
 
 
@@ -109,13 +112,19 @@ def load_config(explicit: str | None) -> dict:
 # ---------------------------------------------------------------- API 客户端
 
 class LightLayer:
-    def __init__(self, base: str, username: str | None, password: str | None):
+    def __init__(self, base: str, username: str | None, password: str | None,
+                 auth_mode: str = "basic"):
+        mode = (auth_mode or "basic").strip().lower()
+        if mode not in AUTH_MODES:
+            raise SystemExit(f"[!] 无效认证模式 {auth_mode!r}, 可选: {'/'.join(AUTH_MODES)}")
         self.base = base.rstrip("/")
         self.username = username
         self.password = password
+        self.auth_mode = mode
+        # basic 直接生效; auto 在 /login 被 WAF 拦截时置 True; bearer 永不降级
+        self.use_basic = mode == "basic"
         self.token: str | None = None
         self.refresh_token: str | None = None
-        self.use_basic = False  # /login 被站点 WAF 拦截时退回 Basic 认证
 
     # 底层请求, 返回 (status, payload)
     def _request(self, method: str, path: str, body=None, token: str | None = None,
@@ -202,13 +211,13 @@ class LightLayer:
         return True
 
     def _login_with_fallback(self):
-        """POST /login 被站点 WAF 按路径拦截(403 返回 HTML)时,
-        退回官方文档同样支持的 HTTP Basic 认证。"""
+        """登录; 仅 auto 模式在 POST /login 被站点 WAF 按路径拦截
+        (403 返回 HTML)时, 退回官方文档同样支持的 HTTP Basic 认证。"""
         try:
             self.login()
         except ApiError as e:
-            if e.status != 403 or isinstance(e.payload, dict):
-                raise  # 业务错误(如密码错误)不降级
+            if self.auth_mode != "auto" or e.status != 403 or isinstance(e.payload, dict):
+                raise  # bearer 模式或业务错误(如密码错误)不降级
             self.use_basic = True
             self.token = self.refresh_token = None
             self._clear_cache()
@@ -262,7 +271,8 @@ def make_client(cfg: dict) -> LightLayer:
     password = cfg.get("LIGHTLAYER_PASSWORD") or None
     if username and not password and sys.stdin.isatty():
         password = getpass.getpass(f"请输入 {username} 的密码: ")
-    return LightLayer(cfg.get("LIGHTLAYER_API_BASE") or DEFAULT_API_BASE, username, password)
+    return LightLayer(cfg.get("LIGHTLAYER_API_BASE") or DEFAULT_API_BASE,
+                      username, password, cfg.get("LIGHTLAYER_AUTH") or "basic")
 
 
 # ---------------------------------------------------------------- 业务逻辑
@@ -605,7 +615,10 @@ def cmd_login(api: LightLayer, args, cfg):
 
 def cmd_logout(api: LightLayer, args, cfg):
     api.logout()
-    print("[✓] 已登出并清除本地 token 缓存")
+    if api.use_basic and not api.token:
+        print("[✓] Basic 认证模式无需吊销 token, 已清除本地缓存")
+    else:
+        print("[✓] 已登出并吊销 token, 本地缓存已清除")
 
 
 # ---------------------------------------------------------------- 入口
@@ -618,10 +631,16 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="无子命令时默认执行 order。首次使用请先: cp .env.example .env 并填写账号。",
     )
     parser.add_argument("--config", help="配置文件路径 (默认依次查找 ./.env、脚本目录/.env)")
+    parser.add_argument("--auth", choices=AUTH_MODES,
+                        help="认证模式 (默认取 LIGHTLAYER_AUTH 或 basic): "
+                             "basic=HTTP Basic(当前 WAF 拦 /login 时唯一可用), "
+                             "auto=优先 token、被拦时降级 basic, bearer=仅 token")
     parser.add_argument("-y", "--yes", action="store_true", help="跳过下单确认")
-    # 子命令也接受 --config/-y, 用 SUPPRESS 避免覆盖顶层已解析的值
+    # 子命令也接受 --config/--auth/-y, 用 SUPPRESS 避免覆盖顶层已解析的值
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    common.add_argument("--auth", choices=AUTH_MODES, default=argparse.SUPPRESS,
+                        help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="command")
 
     p_order = sub.add_parser("order", parents=[common], help="一键下单(默认命令)")
@@ -664,6 +683,8 @@ def main(argv=None):
     command = args.command or "order"
 
     cfg = load_config(getattr(args, "config", None))
+    if getattr(args, "auth", None):
+        cfg["LIGHTLAYER_AUTH"] = args.auth  # 命令行参数优先于配置文件
     api = make_client(cfg)
 
     handlers = {

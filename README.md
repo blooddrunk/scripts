@@ -29,6 +29,7 @@ python3 lightlayer.py          # 不带子命令 = order
 
 `order` / `quote` 支持的临时参数（优先级高于 `.env`）：
 `--product-id`、`--cycle`、`--pay-method`、`--promocode`、`--domain`、`--custom`、`-y`、`--no-quote`。
+全局参数（任意子命令均可用）：`--config <路径>`、`--auth basic|auto|bearer`（优先级高于 `LIGHTLAYER_AUTH`）。
 
 计费周期代码：`m` 月付、`q` 季付、`s` 半年付、`a` 年付、`b` 两年付、`t` 三年付。
 具体产品支持哪些周期以 `products` 命令显示的价格为准。
@@ -41,6 +42,12 @@ python3 lightlayer.py          # 不带子命令 = order
 所有字段见 `.env.example`。要点：
 
 - `LIGHTLAYER_USERNAME` / `LIGHTLAYER_PASSWORD`：必填（密码也可留空，运行时交互输入）。
+- `LIGHTLAYER_AUTH`：认证模式，`basic`（默认）/ `auto` / `bearer`，也可用 `--auth` 参数指定：
+  - `basic`：每个请求携带 HTTP Basic 认证（官方文档支持）。站点 WAF（即网页登录的验证码）
+    按路径硬拦 `POST /api/login`，token 认证当前不可用，故默认 basic。
+  - `auto`：优先 token（缓存 → `POST /token` 刷新 → `POST /login`），`/login` 被 WAF
+    403 拦截时自动降级 basic；适合 WAF 解封后自动回到 token 模式。
+  - `bearer`：仅 token 认证，被拦即报错——用于检测 `/api/login` 是否已放行。
 - `LIGHTLAYER_PRODUCT_ID`：下单必填。
 - `LIGHTLAYER_PAY_METHOD`：默认 `Alipay`。两种配法：
   - **数字 ID**（如 `53`）：下单流程完全跳过 `/payment` 接口调用（少一次请求）；
@@ -50,12 +57,11 @@ python3 lightlayer.py          # 不带子命令 = order
 
 ## 脚本做了什么（流程）
 
-1. **认证**：优先使用本地缓存的 token（`~/.cache/lightlayer/token.json`，权限 0600）；
-   token 过期时自动用 refresh token 换新（`POST /token`）；refresh 也失效时才用账号密码
-   重新登录（`POST /login`）。整个刷新/重登过程对使用者透明。
-   注意：站点 WAF（即网页登录的验证码）会拦截 `POST /api/login`，此时脚本自动切换为
-   官方文档同样支持的 HTTP Basic 认证（2026-11 实测可用；`GET /api/details` 同被拦截，
-   `login` 命令会改用 `/balance` 验证）。
+1. **认证**（`LIGHTLAYER_AUTH` / `--auth`，默认 `basic`）：见上文"配置说明"中三种模式的
+   解释。token 模式（auto/bearer）优先使用本地缓存（`~/.cache/lightlayer/token.json`，
+   权限 0600），过期自动用 refresh token 换新（`POST /token`），失效才重新登录
+   （`POST /login`），刷新/重登过程对使用者透明。
+   注意：`GET /api/details` 也被 WAF 拦截，`login` 命令会改用 `/balance` 验证。
 2. **解析支付方式**：`LIGHTLAYER_PAY_METHOD` 为数字 ID 时直接使用（不调接口）；
    为名称时通过 `GET /payment` 解析成 ID。
 3. **解析支付方式**：`LIGHTLAYER_PAY_METHOD` 是名称时，通过 `GET /payment` 找到对应数字 ID。
@@ -76,6 +82,8 @@ python3 lightlayer.py          # 不带子命令 = order
 ## 安全提示
 
 - `.env` 中是明文密码，请勿提交到 git 或分享给他人（目录下可加 `.gitignore` 忽略 `.env`）。
+- `basic` 模式下每个请求都携带密码（仅 HTTPS 传输）；若介意，可在 `/api/login` 解封后
+  切换 `auto`/`bearer`（token 模式只在登录时发送一次密码）。
 - token 缓存仅本机可读（0600）；在公用机器上用完可执行 `python3 lightlayer.py logout` 吊销并清除。
 
 ## 常见问题
