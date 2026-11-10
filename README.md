@@ -23,12 +23,13 @@ python3 lightlayer.py          # 不带子命令 = order
 | `payments` | 列出支付方式及数字 ID —— 用于查询 Alipay 的 ID |
 | `quote` | 按 `.env` 配置试算价格，不产生订单 |
 | `order` | 正式下单（默认先试算再确认；`-y` 跳过确认） |
+| `watch` | 守候下单：时间窗内按并发/间隔反复下单，直到成功 N 单 / 到期 / Ctrl+C |
 | `invoices` / `invoice --id X` | 查看账单列表 / 单个账单详情 |
 | `login` | 验证账号密码，显示客户信息和余额 |
 | `logout` | 吊销 token 并删除本地缓存 |
 
-`order` / `quote` 支持的临时参数（优先级高于 `.env`）：
-`--product-id`、`--cycle`、`--pay-method`、`--promocode`、`--domain`、`--custom`、`-y`、`--no-quote`。
+`order` / `quote` / `watch` 支持的临时下单参数（优先级高于 `.env`）：
+`--product-id`、`--cycle`、`--pay-method`、`--promocode`、`--domain`、`--custom`（`order` 另有 `-y`、`--no-quote`）。
 全局参数（任意子命令均可用）：`--config <路径>`、`--auth basic|auto|bearer`（优先级高于 `LIGHTLAYER_AUTH`）。
 
 计费周期代码：`m` 月付、`q` 季付、`s` 半年付、`a` 年付、`b` 两年付、`t` 三年付。
@@ -54,6 +55,49 @@ python3 lightlayer.py          # 不带子命令 = order
     仅当下单/试算报错且疑似支付方式问题时，脚本才自动拉取一次支付方式列表辅助排查。
   - **名称**（如 `Alipay`，大小写不敏感）：每次下单前调用 `/payment` 把名称解析成 ID。
 - `LIGHTLAYER_CUSTOM`：极少数产品下单需要提交自定义字段时，以 JSON 数组形式配置。
+
+## 守候下单（watch）
+
+用于补货/抢购场景：在指定时间窗口内（或手动启动后），按并发数和发射间隔反复执行与
+`order -y` 完全相同的下单链路；失败自动重试（仍遵守并发/间隔限制），直到成功订购达到
+目标数量、窗口到期或手动 `Ctrl+C`。
+
+```bash
+# 立即开始守候: 默认并发 2 路、发射间隔 3s, 直到成功 2 单
+python3 lightlayer.py watch
+
+# 配置时间窗口(只写时刻且当天已过则顺延至明天; END 早于 START 视为跨零点)
+python3 lightlayer.py watch --start 20:00 --end 21:00
+python3 lightlayer.py watch --start 20:00 --duration 30m
+
+# 覆盖参数(与 order 相同); 抢购时建议跳过每次尝试前的试算
+python3 lightlayer.py watch -n 1 -c 1 -i 5 --no-quote --product-id 316
+
+# 不真正提交订单, 仅验证守候调度(建议先用这个测试)
+python3 lightlayer.py watch --dry-run --duration 30s
+```
+
+| 参数 | 说明（默认值可由 `.env` 的 `LIGHTLAYER_WATCH_*` 配置，命令行优先） |
+|---|---|
+| `--start` / `--end` | 开始/结束时间 `HH:MM[:SS]` 或 `YYYY-MM-DD HH:MM[:SS]`；无 `--start` 则立即开始 |
+| `--duration` | 最长运行时长：`3600`（秒）/ `90m` / `2h` / `1h30m`；与 `--end` 同时配置先到为准，都没有则不限时 |
+| `-c` / `--concurrency` | 并发尝试数（默认 2） |
+| `-i` / `--interval` | 两次尝试**发射**之间的最小间隔秒（默认 3） |
+| `-n` / `--max-orders` | 目标成功订单数（默认 2，达到即停） |
+| `--no-quote` | 每次尝试跳过价格试算，更快 |
+| `--dry-run` | 走完整流程但不提交订单，该次尝试记为模拟成功 |
+
+要点：
+
+- **失败自动重试**：尝试失败（无货、5xx、网络错误等）后释放并发槽位，由调度器按间隔
+  节奏重新发射；"连续失败"正是守候补货的正常状态，不会因此中断。
+- **不会超订**：仅当"已成功数 + 在途数 < 目标数"时才发射新尝试，目标 2 单最多成功 2 单。
+- **共享鉴权**：所有并发使用同一份凭证；任一请求发现鉴权过期会自动刷新/重新登录，
+  并发下同一轮过期只登录一次，其余请求直接复用新凭证。共享重登后仍 401（凭证本身
+  错误）或配置类错误会立即停止，不再空刷。
+- 等待期间会做一次预检（参数/支付方式/表单/试算），提前暴露配置问题，失败不阻塞守候。
+- 退出码：`0` 达标；`1` 到期/致命错误未达标；`130` 手动 `Ctrl+C`。成功订单同样追加记录到
+  `~/.cache/lightlayer/orders.log`。
 
 ## 脚本做了什么（流程）
 
@@ -96,3 +140,5 @@ python3 lightlayer.py          # 不带子命令 = order
 - **优惠码报 "coupon_not_applicable"？** 说明该码不适用于当前产品/周期（服务端判定），
   订单仍可正常提交，只是没有折扣。
 - **下单成功但服务没开通？** 正常，需先在用户中心支付账单（见上文第 7 步）。
+- **`watch` 怎么先安全测试？** 加 `--dry-run`：走完整守候流程（含登录、表单、试算、调度），
+  只跳过最后的提交订单一步，不会产生真实订单。

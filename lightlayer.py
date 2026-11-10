@@ -12,6 +12,7 @@
   python3 lightlayer.py order                  # 下单(先试算, 再人工确认)
   python3 lightlayer.py order -y               # 跳过确认, 真正"一键下单"
   python3 lightlayer.py                        # 无子命令时等同 order
+  python3 lightlayer.py watch --start 20:00    # 守候下单: 20:00 起并发抢购直到成功 N 单
   python3 lightlayer.py invoices               # 查看账单列表
   python3 lightlayer.py login                  # 验证账号密码 / token
   python3 lightlayer.py logout                 # 吊销 token 并清除本地缓存
@@ -28,9 +29,12 @@ import getpass
 import json
 import os
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from pathlib import Path
 
 DEFAULT_API_BASE = "https://account.lightlayer.net/api"
@@ -60,6 +64,10 @@ class ApiError(RuntimeError):
         super().__init__(f"API 请求失败 [{status}] {path}: {detail}")
 
 
+class NetworkError(RuntimeError):
+    """网络不可达/连接失败等传输层错误(未收到 HTTP 响应)。"""
+
+
 # ---------------------------------------------------------------- 配置
 
 CONFIG_KEYS = (
@@ -67,6 +75,8 @@ CONFIG_KEYS = (
     "LIGHTLAYER_CYCLE", "LIGHTLAYER_PAY_METHOD", "LIGHTLAYER_PROMOCODE",
     "LIGHTLAYER_DOMAIN", "LIGHTLAYER_AFF_ID", "LIGHTLAYER_CUSTOM",
     "LIGHTLAYER_API_BASE", "LIGHTLAYER_AUTH",
+    "LIGHTLAYER_WATCH_START", "LIGHTLAYER_WATCH_END", "LIGHTLAYER_WATCH_DURATION",
+    "LIGHTLAYER_WATCH_CONCURRENCY", "LIGHTLAYER_WATCH_INTERVAL", "LIGHTLAYER_WATCH_MAX_ORDERS",
 )
 
 
@@ -125,6 +135,9 @@ class LightLayer:
         self.use_basic = mode == "basic"
         self.token: str | None = None
         self.refresh_token: str | None = None
+        # 并发共享(watch): 鉴权状态锁 + 代际计数, 过期后并发下只重登一次
+        self._auth_lock = threading.Lock()
+        self._auth_gen = 0
 
     # 底层请求, 返回 (status, payload)
     def _request(self, method: str, path: str, body=None, token: str | None = None,
@@ -147,7 +160,7 @@ class LightLayer:
         except urllib.error.HTTPError as e:
             status, raw = e.code, e.read().decode("utf-8", "replace")
         except urllib.error.URLError as e:
-            raise SystemExit(f"[!] 网络错误, 无法访问 {url}: {e.reason}")
+            raise NetworkError(f"网络错误, 无法访问 {url}: {e.reason}")
         try:
             payload = json.loads(raw) if raw.strip() else None
         except json.JSONDecodeError:
@@ -241,29 +254,48 @@ class LightLayer:
         self.ensure_token()
         try:
             self._request("POST", "/logout", token=self.token)
-        except SystemExit:
+        except (SystemExit, NetworkError):
             pass
         if self.refresh_token:
             try:
                 self._request("POST", "/revoke", {"refresh_token": self.refresh_token})
-            except SystemExit:
+            except (SystemExit, NetworkError):
                 pass
         self.token = self.refresh_token = None
         self._clear_cache()
 
-    # 带认证的请求: 401 时自动刷新/重登, 最多各重试一次
+    # 带认证的请求: 401/403 时自动刷新/重登后重试, 最多重试两次。
+    # 多线程共享同一客户端时(watch 并发), 通过代际计数去重:
+    # 同一轮过期只触发一次重新登录, 其余线程直接复用新凭证。
     def call(self, method: str, path: str, body=None):
-        self.ensure_token()
-        status, payload = self._request(method, path, body, self.token, basic=self.use_basic)
-        if status in (401, 403) and not self.use_basic:
-            if not self.refresh():
-                self._login_with_fallback()
-            status, payload = self._request(method, path, body, self.token, basic=self.use_basic)
-        if status in (401, 403) and not self.use_basic:
-            self._login_with_fallback()
-            status, payload = self._request(method, path, body, self.token, basic=self.use_basic)
+        gen, token, basic = self._acquire_auth()
+        status, payload = self._request(method, path, body, token, basic=basic)
+        for _ in range(2):
+            if status not in (401, 403) or self.use_basic:
+                break
+            gen, token, basic = self._renew_auth(gen)
+            status, payload = self._request(method, path, body, token, basic=basic)
         self._raise_if_error(status, payload, path)
         return payload
+
+    def _acquire_auth(self):
+        """确保已有可用凭证(锁内冷启动登录也只发生一次), 返回 (代际, token, 是否basic)。"""
+        with self._auth_lock:
+            self.ensure_token()
+            return self._auth_gen, self.token, self.use_basic
+
+    def _renew_auth(self, seen_gen: int):
+        """请求被判定鉴权过期(401/403)后调用: 加锁后若其他线程已重登(代际已变)
+        则直接复用新凭证, 否则由本线程刷新 token(失败则重新登录)并推进代际。"""
+        with self._auth_lock:
+            if self._auth_gen == seen_gen:
+                if self.refresh():
+                    print("[i] token 已过期, 自动刷新成功", flush=True)
+                else:
+                    self._login_with_fallback()
+                    print("[i] 鉴权已过期, 已自动重新登录", flush=True)
+                self._auth_gen += 1
+            return self._auth_gen, self.token, self.use_basic
 
 
 def make_client(cfg: dict) -> LightLayer:
@@ -277,20 +309,22 @@ def make_client(cfg: dict) -> LightLayer:
 
 # ---------------------------------------------------------------- 业务逻辑
 
-def resolve_pay_method(api: LightLayer, value) -> int:
+def resolve_pay_method(api: LightLayer, value, quiet: bool = False) -> int:
     """value 为数字字符串时直接用 id, 不调用 /payment 接口;
-    为名称(默认 Alipay)时通过 /payment 解析成 id。"""
+    为名称(默认 Alipay)时通过 /payment 解析成 id。quiet=True 时不打提示(watch 并发尝试用)。"""
     if value is None:
         value = DEFAULT_PAY_METHOD
     value = str(value).strip()
     if value.isdigit():
-        print(f"[i] 支付方式: id={value} (数字ID, 跳过 /payment 接口校验)")
+        if not quiet:
+            print(f"[i] 支付方式: id={value} (数字ID, 跳过 /payment 接口校验)")
         return int(value)
     payments = api.call("GET", "/payment") or {}
     table = payments.get("payments", {}) if isinstance(payments, dict) else {}
     for pid, name in table.items():
         if str(name).strip().lower() == value.lower():
-            print(f"[i] 支付方式: {name} (id={pid})")
+            if not quiet:
+                print(f"[i] 支付方式: {name} (id={pid})")
             return int(pid)
     raise SystemExit(f"[!] 未找到名为 {value!r} 的支付方式。可用列表: {table}\n"
                      "    可运行 `python3 lightlayer.py payments` 查看全部支付方式, "
@@ -309,7 +343,7 @@ def maybe_show_payments_on_error(api: LightLayer, err_payload) -> bool:
         return False
     try:
         table = (api.call("GET", "/payment") or {}).get("payments", {})
-    except (ApiError, SystemExit):
+    except (ApiError, NetworkError, SystemExit):
         return False
     if table:
         print("[!] 该错误疑似与支付方式有关, 已自动获取当前可用支付方式 (id -> 名称):")
@@ -413,13 +447,16 @@ def build_custom(api: LightLayer, product_id: int, overrides) -> dict:
     return custom
 
 
+_LOG_LOCK = threading.Lock()
+
+
 def log_order(payload, ctx: dict):
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         record = dict(ctx)
         if isinstance(payload, dict):
             record.update(payload)
-        with ORDERS_LOG.open("a", encoding="utf-8") as f:
+        with _LOG_LOCK, ORDERS_LOG.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"time": time.strftime("%Y-%m-%d %H:%M:%S"), **record},
                                ensure_ascii=False) + "\n")
     except OSError:
@@ -427,6 +464,25 @@ def log_order(payload, ctx: dict):
 
 
 # ---------------------------------------------------------------- 子命令
+
+def submit_order(api: LightLayer, p: dict, pay_method_id: int, custom):
+    """提交订单并追加记录到 orders.log。order 命令与 watch 并发尝试共用此入口。"""
+    # 使用批量端点 POST /order(与 /quote 的 items 结构同构, custom 嵌套字典格式已验证)
+    item = {"type": "product", "product_id": p["product_id"], "cycle": p["cycle"]}
+    if p["domain"]:
+        item["domain"] = p["domain"]
+    if p["promocode"]:
+        item["promocode"] = p["promocode"]
+    if custom:
+        item["custom"] = custom
+    body = {"pay_method": pay_method_id, "items": [item]}
+    if p["aff_id"]:
+        body["aff_id"] = int(p["aff_id"])
+    payload = api.call("POST", "/order", body)
+    log_order(payload, {"product_id": p["product_id"], "cycle": p["cycle"],
+                        "pay_method_id": pay_method_id})
+    return payload
+
 
 def cmd_order(api: LightLayer, args, cfg: dict):
     p = get_order_params(args, cfg)
@@ -459,25 +515,11 @@ def cmd_order(api: LightLayer, args, cfg: dict):
         print("[i] 已取消")
         return
 
-    # 使用批量端点 POST /order(与 /quote 的 items 结构同构, custom 嵌套字典格式已验证)
-    item = {"type": "product", "product_id": p["product_id"], "cycle": p["cycle"]}
-    if p["domain"]:
-        item["domain"] = p["domain"]
-    if p["promocode"]:
-        item["promocode"] = p["promocode"]
-    if custom:
-        item["custom"] = custom
-    body = {"pay_method": pay_method_id, "items": [item]}
-    if p["aff_id"]:
-        body["aff_id"] = int(p["aff_id"])
-
     try:
-        payload = api.call("POST", "/order", body)
+        payload = submit_order(api, p, pay_method_id, custom)
     except ApiError as e:
         maybe_show_payments_on_error(api, e.payload)
         raise
-    log_order(payload, {"product_id": p["product_id"], "cycle": p["cycle"],
-                        "pay_method_id": pay_method_id})
 
     print("\n[✓] 下单成功!")
     if isinstance(payload, dict):
@@ -492,6 +534,287 @@ def cmd_order(api: LightLayer, args, cfg: dict):
             print(f"    支付  : 请打开 {CLIENT_AREA}/invoice/{inv} 完成支付")
     else:
         print("   ", payload)
+
+
+# ---------------------------------------------------------------- 守候下单(watch)
+
+_WATCH_PRINT_LOCK = threading.Lock()
+
+
+def wlog(msg: str):
+    """watch 模式单行日志: 带时间戳, 加锁防止并发打印交错。"""
+    with _WATCH_PRINT_LOCK:
+        print(f"[watch] {time.strftime('%H:%M:%S')} {msg}", flush=True)
+
+
+def one_line(text, limit: int = 200) -> str:
+    """压成单行并截断, 用于失败原因等输出。"""
+    return " ".join(str(text).split())[:limit]
+
+
+def parse_watch_time(text: str, base: datetime, roll_next_day: bool) -> datetime:
+    """解析 'HH:MM[:SS]'(以 base 所在当天为基准) 或 'YYYY-MM-DD[ T]HH:MM[:SS]'。
+    roll_next_day=True 且当天该时刻已过(<=base)时顺延一天(守候窗口常用语义)。"""
+    text = text.strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+                "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
+        try:
+            return datetime.strptime(text, fmt)  # 绝对时间不滚动
+        except ValueError:
+            pass
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            t = datetime.strptime(text, fmt)
+            dt = base.replace(hour=t.hour, minute=t.minute, second=t.second, microsecond=0)
+            if roll_next_day and dt <= base:
+                dt += timedelta(days=1)
+            return dt
+        except ValueError:
+            pass
+    raise SystemExit(f"[!] 无法解析时间 {text!r}: 支持 HH:MM[:SS] 或 'YYYY-MM-DD HH:MM[:SS]'")
+
+
+def parse_duration(text: str) -> int:
+    """解析时长: 纯数字=秒; 支持组合后缀如 90m / 2h / 1h30m / 2d。"""
+    s = str(text).strip().lower()
+    if s.isdigit():
+        total = int(s)
+    else:
+        units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+        total, num = 0, ""
+        for ch in s:
+            if ch.isdigit() or ch == ".":
+                num += ch
+            elif ch in units and num:
+                total += int(float(num) * units[ch])
+                num = ""
+            else:
+                raise SystemExit(f"[!] 无法解析时长 {text!r}: 支持 3600 / 90m / 2h / 1h30m")
+        if num:
+            raise SystemExit(f"[!] 时长 {text!r} 末尾缺少单位(纯数字视为秒)")
+    if total <= 0:
+        raise SystemExit(f"[!] 时长必须为正数: {text!r}")
+    return total
+
+
+def _watch_raw(args, cfg: dict, attr: str, env_key: str):
+    """取 watch 配置: 命令行参数 > .env/环境变量; 都没有返回 None。"""
+    raw = getattr(args, attr, None)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        raw = cfg.get(env_key)
+        if raw is not None and not str(raw).strip():
+            raw = None
+    return raw
+
+
+def _watch_number(args, cfg: dict, attr: str, env_key: str, default, typ, minimum):
+    raw = _watch_raw(args, cfg, attr, env_key)
+    if raw is None:
+        return default
+    try:
+        val = typ(str(raw).strip())
+    except ValueError:
+        raise SystemExit(f"[!] {env_key} 必须是数字: {raw!r}")
+    if val < minimum:
+        raise SystemExit(f"[!] {env_key} 不能小于 {minimum}: {raw!r}")
+    return val
+
+
+def wait_until(target: datetime):
+    """睡到目标时刻; 倒计时每 10s 报一次, 最后 10s 逐秒报。"""
+    last = None
+    while True:
+        remain = int((target - datetime.now()).total_seconds())
+        if remain <= 0:
+            return
+        if remain <= 10 or remain % 10 == 0:
+            if remain != last:
+                wlog(f"距开始还有 {remain}s")
+                last = remain
+        time.sleep(0.2)
+
+
+def watch_preflight(api: LightLayer, args, cfg: dict, no_quote: bool):
+    """窗口开启前做一次预检(参数/支付方式/表单/试算), 提前暴露配置问题; 失败不阻塞守候。"""
+    try:
+        p = get_order_params(args, cfg)
+        pay_value = (getattr(args, "pay_method", None)
+                     or cfg.get("LIGHTLAYER_PAY_METHOD") or DEFAULT_PAY_METHOD)
+        pay_id = resolve_pay_method(api, pay_value)
+        custom = build_custom(api, p["product_id"], p["custom"])
+        if not no_quote:
+            do_quote(api, p["product_id"], p["cycle"], pay_id,
+                     p["promocode"], p["domain"], custom)
+        wlog("预检通过(账号/支付方式/下单表单可用)")
+    except (ApiError, NetworkError, SystemExit) as e:
+        wlog(f"预检未通过(不影响守候, 窗口开启后每次尝试仍会完整执行): {one_line(e)}")
+
+
+def cmd_watch(api: LightLayer, args, cfg: dict):
+    """守候下单: 时间窗内按并发/间隔反复执行与 order -y 相同的下单链路,
+    失败自动重试(仍遵守并发/间隔限制), 直到成功达到目标数/窗口到期/手动 Ctrl+C。"""
+    no_quote = getattr(args, "no_quote", False)
+    dry_run = getattr(args, "dry_run", False)
+    if not (api.username and api.password):
+        raise SystemExit("[!] watch 需要账号密码: 请在 .env 配置 LIGHTLAYER_USERNAME / LIGHTLAYER_PASSWORD")
+    p = get_order_params(args, cfg)  # 提前校验产品等下单参数, 缺失直接报错
+
+    concurrency = _watch_number(args, cfg, "concurrency", "LIGHTLAYER_WATCH_CONCURRENCY", 2, int, 1)
+    interval = _watch_number(args, cfg, "interval", "LIGHTLAYER_WATCH_INTERVAL", 3.0, float, 0)
+    max_orders = _watch_number(args, cfg, "max_orders", "LIGHTLAYER_WATCH_MAX_ORDERS", 2, int, 1)
+
+    now = datetime.now()
+    start_raw = _watch_raw(args, cfg, "start", "LIGHTLAYER_WATCH_START")
+    if start_raw:
+        start_dt = parse_watch_time(str(start_raw), now, roll_next_day=True)
+        if start_dt != parse_watch_time(str(start_raw), now, roll_next_day=False):
+            wlog(f"开始时间 {start_raw!r} 今天已过, 已顺延至 {start_dt:%Y-%m-%d %H:%M:%S}")
+    else:
+        start_dt = now  # 手动模式: 启动即开始
+
+    deadline_dt = None
+    end_raw = _watch_raw(args, cfg, "end", "LIGHTLAYER_WATCH_END")
+    dur_raw = _watch_raw(args, cfg, "duration", "LIGHTLAYER_WATCH_DURATION")
+    if end_raw and dur_raw:
+        wlog("同时配置了结束时间与时长, 先到者为准")
+    if end_raw:
+        # 以开始时刻为基准解析, 早于开始时间则视为跨零点顺延一天
+        deadline_dt = parse_watch_time(str(end_raw), start_dt, roll_next_day=True)
+    if dur_raw:
+        dur_end = start_dt + timedelta(seconds=parse_duration(str(dur_raw)))
+        deadline_dt = min(deadline_dt, dur_end) if deadline_dt else dur_end
+    if deadline_dt and deadline_dt <= max(start_dt, now):
+        raise SystemExit(f"[!] 截止时间 {deadline_dt:%Y-%m-%d %H:%M:%S} 不晚于开始时间, "
+                         "请检查 WATCH_END / WATCH_DURATION")
+
+    window = (f"{start_dt:%m-%d %H:%M:%S} ~ {deadline_dt:%m-%d %H:%M:%S}" if deadline_dt
+              else "不限时(达标或 Ctrl+C 停止)")
+    wlog(f"守候下单: 并发={concurrency} 间隔={interval:g}s 目标={max_orders}单 窗口={window}"
+         + (" [DRY-RUN]" if dry_run else ""))
+    wlog(f"产品 #{p['product_id']} 周期 {p['cycle']}, 认证模式={api.auth_mode}, "
+         "全部并发共享同一份凭证(过期自动重登, 并发下只登一次)")
+
+    # ---- 等待开始时间(期间做一次预检) ----
+    if start_dt > now:
+        watch_preflight(api, args, cfg, no_quote)
+        wlog(f"等待开始时间 {start_dt:%Y-%m-%d %H:%M:%S} ...")
+        try:
+            wait_until(start_dt)
+        except KeyboardInterrupt:
+            print("\n[watch] 已手动取消(等待阶段, 未发起任何下单)")
+            sys.exit(130)
+    else:
+        watch_preflight(api, args, cfg, no_quote)
+    wlog("窗口开启, 开始守候下单")
+
+    def attempt_once(attempt_id: int):
+        """一次完整下单尝试(与 order -y 同链路: 参数→支付方式→表单→试算→下单)。
+        返回 (attempt_id, ok, fatal, detail, order_nums); fatal=True 表示重试无意义。"""
+        try:
+            pp = get_order_params(args, cfg)
+            pay_value = (getattr(args, "pay_method", None)
+                         or cfg.get("LIGHTLAYER_PAY_METHOD") or DEFAULT_PAY_METHOD)
+            pay_method_id = resolve_pay_method(api, pay_value, quiet=True)
+            custom = build_custom(api, pp["product_id"], pp["custom"])
+            if not no_quote:  # 试算失败不影响下单, 与 order 命令一致
+                try:
+                    do_quote(api, pp["product_id"], pp["cycle"], pay_method_id,
+                             pp["promocode"], pp["domain"], custom)
+                except (ApiError, NetworkError):
+                    pass
+            if dry_run:
+                return attempt_id, True, False, "DRY-RUN 模拟成功(未提交订单)", []
+            payload = submit_order(api, pp, pay_method_id, custom)
+            nums, total = [], None
+            if isinstance(payload, dict):
+                nums = payload.get("order_num_list") or (
+                    [payload["order_num"]] if payload.get("order_num") else [])
+                total = payload.get("total")
+            detail = "订单号 " + (", ".join(map(str, nums)) if nums else "?")
+            if total is not None:
+                detail += f", 金额 {total}"
+            return attempt_id, True, False, detail, [str(n) for n in nums]
+        except SystemExit as e:  # 参数/配置类错误(如缺账号), 重试无意义
+            return attempt_id, False, True, one_line(e), []
+        except NetworkError as e:
+            return attempt_id, False, False, "网络错误: " + one_line(e), []
+        except ApiError as e:
+            # call() 内共享重登后仍 401, 说明凭证本身有问题, 继续刷无意义
+            return attempt_id, False, e.status == 401, one_line(e), []
+        except Exception as e:  # 其他意外错误(如读超时), 按可重试处理
+            return attempt_id, False, False, f"内部错误 {type(e).__name__}: {one_line(e)}", []
+
+    attempts = successes = failures = 0
+    orders: list = []
+    fatal_msg: str | None = None
+
+    def settle(result):
+        """主线程回收一次尝试结果并单行汇报。"""
+        nonlocal successes, failures, fatal_msg
+        aid, ok, fatal, detail, nums = result
+        if ok:
+            successes += 1
+            orders.extend(nums)
+            wlog(f"#{aid} 成功: {detail}")
+        else:
+            failures += 1
+            wlog(f"#{aid} 失败: {detail}")
+            if fatal and not fatal_msg:
+                fatal_msg = f"#{aid} {detail}"
+
+    started = time.monotonic()
+    deadline_ts = deadline_dt.timestamp() if deadline_dt else None
+    cancelled = False
+    next_launch = 0.0  # 窗口开启立即发射第一批
+    pending: set = set()
+    executor = ThreadPoolExecutor(max_workers=concurrency)
+    try:
+        while True:
+            for fut in [f for f in pending if f.done()]:  # 先回收已完成的尝试
+                pending.discard(fut)
+                settle(fut.result())
+            if successes >= max_orders:
+                wlog(f"已达到目标 {max_orders} 单, 停止守候")
+                break
+            if fatal_msg:
+                wlog(f"遇到不可重试错误, 停止守候: {fatal_msg}")
+                break
+            if deadline_ts is not None and time.time() >= deadline_ts:
+                wlog("时间窗口到期, 不再发射新尝试(在途尝试仍会完成并计入)")
+                break
+            # 发射条件: 不超订(成功数+在途数<目标) 且 遵守发射间隔
+            if successes + len(pending) < max_orders and time.monotonic() >= next_launch:
+                attempts += 1
+                pending.add(executor.submit(attempt_once, attempts))
+                next_launch = time.monotonic() + interval
+                continue
+            time.sleep(0.2)
+    except KeyboardInterrupt:
+        cancelled = True
+        wlog("收到 Ctrl+C, 不再发射新尝试, 等待在途尝试结束(再按一次可强制退出)...")
+    finally:
+        executor.shutdown(wait=True)
+
+    for fut in list(pending):  # shutdown(wait=True) 后在途尝试均已结束
+        settle(fut.result())
+    pending.clear()
+
+    # ---- 汇总 ----
+    elapsed = time.monotonic() - started
+    print()
+    wlog("===== 守候结束 =====")
+    wlog(f"尝试 {attempts} 次: 成功 {successes}, 失败 {failures}, 历时 {elapsed:.0f}s "
+         f"(目标达成 {successes}/{max_orders})")
+    if orders:
+        wlog("成功订单: " + ", ".join(orders))
+    if not dry_run:
+        wlog(f"下单明细已追加至: {ORDERS_LOG}")
+    if cancelled:
+        print("[i] 已手动取消")
+        sys.exit(130)
+    if successes >= max_orders:
+        return  # 达标, 退出码 0
+    sys.exit(1)
 
 
 def cmd_quote(api: LightLayer, args, cfg: dict):
@@ -656,6 +979,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_quote = sub.add_parser("quote", parents=[common], help="仅试算价格, 不下单")
     add_order_args(p_quote)
 
+    p_watch = sub.add_parser("watch", parents=[common],
+                             help="守候下单: 时间窗内按并发/间隔反复下单, 直到成功N单/到期/手动停止")
+    add_order_args(p_watch)
+    p_watch.add_argument("--no-quote", action="store_true",
+                         help="每次尝试跳过价格试算(抢购时更快)")
+    p_watch.add_argument("--start", help="开始时间 HH:MM[:SS] 或 'YYYY-MM-DD HH:MM[:SS]' "
+                         "(默认取 LIGHTLAYER_WATCH_START, 未配置则立即开始; 当天已过顺延至明天)")
+    p_watch.add_argument("--end", help="结束时间, 格式同 --start (早于开始时间视为跨零点窗口)")
+    p_watch.add_argument("--duration", help="最长运行时长, 如 3600 / 90m / 2h (与 --end 同时配置先到为准)")
+    p_watch.add_argument("-c", "--concurrency", type=int, help="并发下单尝试数 (默认 2)")
+    p_watch.add_argument("-i", "--interval", type=float, help="两次尝试发射的最小间隔秒 (默认 3)")
+    p_watch.add_argument("-n", "--max-orders", type=int, dest="max_orders",
+                         help="目标成功订单数, 达到即停 (默认 2)")
+    p_watch.add_argument("--dry-run", action="store_true",
+                         help="走完整流程但不提交订单, 用于安全验证守候调度")
+
     sub.add_parser("products", parents=[common], help="列出产品分类/产品/价格 (查 product_id)")
     p_forms = sub.add_parser("forms", parents=[common], help="查看产品下单表单(字段/item id/默认值)")
     p_forms.add_argument("--product-id", help="产品ID (默认取 LIGHTLAYER_PRODUCT_ID)")
@@ -689,6 +1028,7 @@ def main(argv=None):
 
     handlers = {
         "order": cmd_order,
+        "watch": cmd_watch,
         "quote": cmd_quote,
         "products": cmd_products,
         "forms": cmd_forms,
@@ -701,6 +1041,9 @@ def main(argv=None):
     try:
         handlers[command](api, args, cfg)
     except ApiError as e:
+        print(f"[!] {e}", file=sys.stderr)
+        sys.exit(1)
+    except NetworkError as e:
         print(f"[!] {e}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
