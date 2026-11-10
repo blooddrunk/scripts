@@ -53,6 +53,9 @@ python3 lightlayer.py          # 不带子命令 = order
 1. **认证**：优先使用本地缓存的 token（`~/.cache/lightlayer/token.json`，权限 0600）；
    token 过期时自动用 refresh token 换新（`POST /token`）；refresh 也失效时才用账号密码
    重新登录（`POST /login`）。整个刷新/重登过程对使用者透明。
+   注意：站点 WAF（即网页登录的验证码）会拦截 `POST /api/login`，此时脚本自动切换为
+   官方文档同样支持的 HTTP Basic 认证（2026-11 实测可用；`GET /api/details` 同被拦截，
+   `login` 命令会改用 `/balance` 验证）。
 2. **解析支付方式**：`LIGHTLAYER_PAY_METHOD` 为数字 ID 时直接使用（不调接口）；
    为名称时通过 `GET /payment` 解析成 ID。
 3. **解析支付方式**：`LIGHTLAYER_PAY_METHOD` 是名称时，通过 `GET /payment` 找到对应数字 ID。

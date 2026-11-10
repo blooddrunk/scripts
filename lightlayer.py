@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import getpass
 import json
 import os
@@ -114,9 +115,11 @@ class LightLayer:
         self.password = password
         self.token: str | None = None
         self.refresh_token: str | None = None
+        self.use_basic = False  # /login 被站点 WAF 拦截时退回 Basic 认证
 
     # 底层请求, 返回 (status, payload)
-    def _request(self, method: str, path: str, body=None, token: str | None = None):
+    def _request(self, method: str, path: str, body=None, token: str | None = None,
+                 basic: bool = False):
         url = self.base + path
         data = None
         headers = {"Accept": "application/json"}
@@ -125,6 +128,9 @@ class LightLayer:
             headers["Content-Type"] = "application/json"
         if token:
             headers["Authorization"] = "Bearer " + token
+        elif basic and self.username and self.password:
+            cred = base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
+            headers["Authorization"] = "Basic " + cred
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
@@ -195,17 +201,34 @@ class LightLayer:
         self._save_cache()
         return True
 
+    def _login_with_fallback(self):
+        """POST /login 被站点 WAF 按路径拦截(403 返回 HTML)时,
+        退回官方文档同样支持的 HTTP Basic 认证。"""
+        try:
+            self.login()
+        except ApiError as e:
+            if e.status != 403 or isinstance(e.payload, dict):
+                raise  # 业务错误(如密码错误)不降级
+            self.use_basic = True
+            self.token = self.refresh_token = None
+            self._clear_cache()
+            print("[i] POST /login 被站点 WAF 拦截(与网页端验证码同源), "
+                  "已自动切换为 HTTP Basic 认证(官方文档支持的认证方式)")
+
     def ensure_token(self):
-        if self.token:
+        if self.use_basic or self.token:
             return
         self._load_cache()
         if self.token:
             return
         if self.refresh_token and self.refresh():
             return
-        self.login()
+        self._login_with_fallback()
 
     def logout(self):
+        if self.use_basic and not self.token:  # Basic 模式无 token 可吊销
+            self._clear_cache()
+            return
         self.ensure_token()
         try:
             self._request("POST", "/logout", token=self.token)
@@ -222,14 +245,14 @@ class LightLayer:
     # 带认证的请求: 401 时自动刷新/重登, 最多各重试一次
     def call(self, method: str, path: str, body=None):
         self.ensure_token()
-        status, payload = self._request(method, path, body, self.token)
-        if status in (401, 403):
+        status, payload = self._request(method, path, body, self.token, basic=self.use_basic)
+        if status in (401, 403) and not self.use_basic:
             if not self.refresh():
-                self.login()
-            status, payload = self._request(method, path, body, self.token)
-        if status in (401, 403):
-            self.login()
-            status, payload = self._request(method, path, body, self.token)
+                self._login_with_fallback()
+            status, payload = self._request(method, path, body, self.token, basic=self.use_basic)
+        if status in (401, 403) and not self.use_basic:
+            self._login_with_fallback()
+            status, payload = self._request(method, path, body, self.token, basic=self.use_basic)
         self._raise_if_error(status, payload, path)
         return payload
 
@@ -559,10 +582,17 @@ def cmd_invoice(api: LightLayer, args, cfg):
 
 def cmd_login(api: LightLayer, args, cfg):
     api.ensure_token()
-    d = api.call("GET", "/details") or {}
-    if isinstance(d, dict) and isinstance(d.get("client"), dict):
-        d = d["client"]  # 真实响应外层包了 client 键
-    print(f"[✓] 登录成功: {d.get('email')} (客户ID: {d.get('id')})")
+    auth = "HTTP Basic" if api.use_basic else "Bearer token"
+    d = {}
+    try:
+        d = api.call("GET", "/details") or {}
+        if isinstance(d, dict) and isinstance(d.get("client"), dict):
+            d = d["client"]  # 真实响应外层包了 client 键
+    except ApiError:
+        print("[!] GET /details 被站点 WAF 拦截, 以 /balance 验证登录")
+    email = d.get("email") or cfg.get("LIGHTLAYER_USERNAME")
+    cid = d.get("id", "?")
+    print(f"[✓] 登录成功({auth}): {email} (客户ID: {cid})")
     try:
         bal = api.call("GET", "/balance") or {}
         if isinstance(bal, dict) and isinstance(bal.get("details"), dict):
