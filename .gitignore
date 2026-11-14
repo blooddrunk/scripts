@@ -1,7 +1,7 @@
 # 依赖
 node_modules/
 
-# 本地分析材料（含牛客专有前端代码，不宜公开分发）
+# 各脚本目录下的本地分析材料（如 web-ux-freedom/references/，含牛客专有前端代码，不宜公开分发）
 references/
 
 # WSL 附件标记
@@ -9,3 +9,6 @@ references/
 
 # playwright-cli 会话产物
 .playwright-cli/
+
+# ZCode 会话产物（计划文件等）
+.zcode/
