@@ -7,7 +7,8 @@
 | 脚本 | 说明 |
 |---|---|
 | [网页体验自由 (Web UX Freedom)](web-ux-freedom/) | 解除网站前端体验限制：切屏/失焦检测、强制全屏、禁复制/禁右键、快捷键屏蔽、反反调试、诚信粘贴守卫、PrintScreen 拦截、键盘行为记录器等，全部功能可按站点开关 |
-| [Raksmart VPS 自动下单助手](raksmart-auto-order/) | Raksmart 特价 VPS 定时抢购：自动勾选内网与服务条款，按单次/每日场次校验价格与周期后点击购买；开抢前预热修复页面、设置持久化、防重复下单锁 |
+| [Raksmart VPS 自动下单助手](raksmart-auto-order/) | Raksmart 特价 VPS 定时抢购（**v2 API 直连**）：绕过页面 DOM 直接调 Medusa 后端完成报价校验与下单结账，页面卡顿不影响；按单次/每日场次调度、防重复下单锁、状态面板 |
+| [Raksmart API 直连抢购 (Node)](raksmart-api-sniper/) | 上表的独立 Node.js 版本（零依赖）：自动登录（OAuth 四跳）、时钟校准、场次等待、并行下单、结账输出账单链接；含完整接口逆向文档 |
 
 ## 目录约定
 

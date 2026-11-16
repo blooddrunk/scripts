@@ -1,60 +1,119 @@
 // ==UserScript==
 // @name         Raksmart VPS 自动下单助手
 // @namespace    https://github.com/jelinenaro/tampermonkey
-// @version      1.2.0
-// @description  自动勾选内网和服务条款，按单次或每日场次校验价格并购买；支持开抢前预修复、设置持久化和防重复下单。
+// @version      2.0.0
+// @description  API 直连版：绕过页面 DOM，直接调用 Raksmart 订购接口完成报价校验与下单，页面卡顿不再影响抢购；保留场次调度、防重复锁与状态面板。
 // @author       jelinenaro
-// @match        https://billing.raksmart.com/ec/price*
+// @match        https://billing.raksmart.com/ec/*
 // @run-at       document-start
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
 // @grant        GM_registerMenuCommand
+// @grant        GM_xmlhttpRequest
+// @connect      billing.raksmart.com
+// @connect      rak-ec-service.raksmart.com
 // @license      MIT
 // ==/UserScript==
+
+/*
+ * v2.0.0 引擎说明（相对 v1.x 的重写）
+ *
+ * v1.x 完全依赖订购页 DOM：等表单渲染、读价格节点、点购买按钮——
+ * 抢购高峰 React 页面卡死时脚本随之失效。
+ *
+ * v2 直接调用页面背后的 Medusa 后端（https://rak-ec-service.raksmart.com/store）：
+ *   1. GET  /store/customers/me               → 登录态检测
+ *   2. POST /store/custom/price/get-product-price → 报价（价格、周期、活动校验）
+ *   3. POST /store/custom/cart/add-order       → 下单（返回 cart id）
+ *   4. POST /store/custom/whmcs-cart/checkout-cart → 结账生成订单与账单
+ *
+ * 请求用页面内 fetch 发出：CORS 允许 billing.raksmart.com 携带凭证，
+ * 登录 Cookie（connect.sid，SameSite=None）随请求自动带上。
+ * 因此本脚本可在任意 /ec/* 页面运行，无需订购页本身正常渲染。
+ *
+ * 自动重新登录（可选）：在设置里填入账号密码后，会话失效时用
+ * GM_xmlhttpRequest 走 medusa-login.php → OAuth 链路重登；不填则提示手动登录。
+ */
 
 (function () {
   'use strict';
 
   if (window.top !== window.self) return;
 
+  /* ================= 接口常量（逆向自订购前端，改版时需更新） ================= */
+
+  const API_BASE = 'https://rak-ec-service.raksmart.com/store';
+  const PUBLISHABLE_KEY = 'pk_01HKV8SJC13X083AN545TWEPS4';
+  const LOGIN_URL = 'https://billing.raksmart.com/whmcs/medusa-login.php';
+  const CLIENTAREA_URL = 'https://billing.raksmart.com/whmcs/clientarea.php';
+
+  // pid 1889（SV 2C4G 双十一秒杀）订购页默认配置，抓包自正式页面。
+  // 换商品时：先在订购页把配置选好，F12 抓 get-product-price 的 configoptions 填进来；
+  // 模板中未被覆盖的隐藏配置项会在运行时自动补第一个可选值。
+  const DEFAULT_CONFIGOPTIONS = {
+    29330: 322486,   // Plan: 2 Cores,4 G
+    29331: 363316,   // OS: CentOS 7.6
+    31352: 346151,   // Bandwidth Type: 精品CN2
+    31354: '0',      // Bandwidth（数量型）
+    31356: '1',      // IP Num（数量型）
+    31383: 346207,   // DDoS IP 1: 无
+    31384: 346220,   // DDoS IP 2: 无
+    31385: 346235,   // DDoS IP 3: 无
+    31386: 346244,   // DDoS IP 4: 无
+    31387: 346257,   // DDoS IP 5: 无
+    31450: 346591,   // Site IP: 无
+    31555: 348540,   // System Disk: NVMe 50G
+    33081: 373809,   // Billing Method: 流量计费
+    33110: 386738,   // Traffic: Enterprise CN2 1T
+    33382: 378155,   // Os Type: OS
+    33386: 378178,   // System disk type
+  };
+
+  // 付款周期显示文本 → Medusa billingcycle 代码
+  const CYCLE_MAP = [
+    [/每月|monthly/i, 'monthly'],
+    [/每季|季度|quarterly/i, 'quarterly'],
+    [/半年|semiannually/i, 'semiannually'],
+    [/每年|年度|年付|annually/i, 'annually'],
+  ];
+
   /* ================= 默认配置 ================= */
 
-  // 仅首次运行或恢复默认设置时使用。之后请在页面右下角面板中修改，更新脚本不会覆盖。
   const DEFAULT_CONFIG = {
     productId: '1889',
     sampleId: 'psam_01M24N3CFJDQ6AX41HVYFT5GCF',
     activityId: 'act_01M4TBMTG2VMWJPXXCYX2WZS2S',
 
-    autoCheckInternalNetwork: true,
-    autoAcceptTerms: true,
     expectedPrice: 49.90,
     expectedCycle: '每年',
+    internalNetwork: true,
 
-    // once：单次，使用带时区的 ISO 8601 时间；daily：每日，使用 HH:mm。
+    // 可选：自动重新登录的账号密码（留空则会话失效时仅提示手动登录）
+    loginEmail: '',
+    loginPassword: '',
+
+    // once：单次，使用带时区的 ISO 8601 时间；daily：每日多时段，每段使用 HH:mm。
     scheduleMode: 'once',
     saleStart: '',
     saleEnd: '',
-    dailyStart: '20:00',
-    dailyEnd: '20:10',
+    dailyWindows: [{ start: '20:00', end: '20:10' }],
 
     // 每日场次使用固定 UTC 偏移，默认 UTC+8，不受电脑时区影响。
     utcOffsetMinutes: 480,
     clockOffsetMs: 0,
 
-    preheatBeforeMinutes: 60,
-    quoteStableMs: 800,
-    reloadAfterMs: 12000,
-    errorReloadAfterMs: 3000,
+    preheatBeforeMinutes: 10,
+    preheatQuoteIntervalMs: 5000,   // 预热期报价巡检间隔
+    idleQuoteIntervalMs: 30000,     // 场次外报价巡检间隔
+    orderIntervalMs: 1000,          // 抢购中 add-order 重试间隔
+    orderTimeoutMs: 15000,
     attemptLockEnabled: true,
-    retryIntervalMs: 5000,
   };
 
   const SETTINGS_KEY = 'raksmart-auto-order:settings';
   const LOG_PREFIX = '[Raksmart 自动下单]';
   const DAY_MS = 24 * 60 * 60 * 1000;
-  const PREHEAT_RELOAD_CUTOFF_MS = 5000;
-  const PAGE_STARTED_AT = Date.now();
 
   /* ================= 持久存储 ================= */
 
@@ -109,20 +168,44 @@
     ...DEFAULT_CONFIG,
     ...(savedSettings && typeof savedSettings === 'object' ? savedSettings : {}),
   };
+
+  // v1 → v2 字段迁移：丢弃仅 DOM 模式使用的设置
+  function migrateLegacySettings(settings) {
+    delete settings.autoCheckInternalNetwork;
+    delete settings.autoAcceptTerms;
+    delete settings.quoteStableMs;
+    delete settings.reloadAfterMs;
+    delete settings.errorReloadAfterMs;
+    delete settings.retryIntervalMs;
+  }
+  migrateLegacySettings(CONFIG);
   if (!savedSettings) store.set(SETTINGS_KEY, CONFIG);
 
   /* ================= 状态与场次计算 ================= */
 
   let paused = false;
-  let purchaseClickedFor = null;
-  let lastPurchaseAttemptAt = 0;
-  let reloadScheduled = false;
-  let quoteSignature = '';
-  let quoteStableSince = 0;
   let panel = null;
   let scheduled = false;
 
-  const lastCheckboxClick = new WeakMap();
+  // 登录态与商品模板缓存
+  const identity = { customer: null, checkedAt: 0, checking: null, failCount: 0 };
+  const product = { template: null, configOptions: null, customFields: null, productId: null };
+
+  // 报价缓存
+  const quoteState = {
+    lastAt: 0, inFlight: null,
+    price: null, cycleText: '', validateOk: null, validateMsg: '', discountIds: [],
+  };
+
+  // 抢购执行状态
+  const hunt = {
+    active: false,          // 正处于抢购窗口且已开火
+    inFlightOrder: false,
+    lastOrderAt: 0,
+    attempts: 0,
+    lastError: '',
+    result: null,           // { cartId, orderId, invoiceId, invoiceUrl, at }
+  };
 
   function now() {
     return Date.now() + Number(CONFIG.clockOffsetMs || 0);
@@ -147,41 +230,64 @@
     return `UTC${sign}${Math.floor(absolute / 60)}${absolute % 60 ? `:${String(absolute % 60).padStart(2, '0')}` : ''}`;
   }
 
+  function normalizeDailyWindows(settings) {
+    const windows = Array.isArray(settings.dailyWindows) ? settings.dailyWindows : [];
+    return windows
+      .map((window) => ({
+        startText: String(window?.start || '').trim(),
+        endText: String(window?.end || '').trim(),
+      }))
+      .filter((window) => window.startText || window.endText)
+      .map((window) => ({
+        ...window,
+        start: parseDailyTime(window.startText),
+        end: parseDailyTime(window.endText),
+      }));
+  }
+
   function resolveSchedule(timestamp, settings = CONFIG) {
     if (settings.scheduleMode === 'daily') {
-      const configured = Boolean(settings.dailyStart || settings.dailyEnd);
-      const startTime = parseDailyTime(settings.dailyStart);
-      const endTime = parseDailyTime(settings.dailyEnd);
+      const windows = normalizeDailyWindows(settings);
       const offset = Number(settings.utcOffsetMinutes);
-      if (!configured) return { configured: false, valid: false };
-      if (startTime === null || endTime === null || startTime === endTime
+      if (windows.length === 0) return { configured: false, valid: false };
+      if (!windows.every((window) => window.start !== null && window.end !== null
+        && window.start !== window.end)
         || !Number.isFinite(offset) || offset < -840 || offset > 840) {
         return { configured: true, valid: false };
       }
 
       const offsetMs = offset * 60 * 1000;
       const dayStart = Math.floor((timestamp + offsetMs) / DAY_MS) * DAY_MS - offsetMs;
-      let start = dayStart + startTime;
-      let end = dayStart + endTime + (endTime <= startTime ? DAY_MS : 0);
-
-      if (timestamp >= end) {
-        start += DAY_MS;
-        end += DAY_MS;
-      } else if (timestamp < start) {
-        const previousStart = start - DAY_MS;
-        const previousEnd = end - DAY_MS;
-        if (timestamp >= previousStart && timestamp < previousEnd) {
-          start = previousStart;
-          end = previousEnd;
+      const occurrences = windows.map((window) => {
+        let start = dayStart + window.start;
+        let end = dayStart + window.end + (window.end <= window.start ? DAY_MS : 0);
+        if (timestamp >= end) {
+          start += DAY_MS;
+          end += DAY_MS;
+        } else if (timestamp < start) {
+          const previousStart = start - DAY_MS;
+          const previousEnd = end - DAY_MS;
+          if (timestamp >= previousStart && timestamp < previousEnd) {
+            start = previousStart;
+            end = previousEnd;
+          }
         }
-      }
+        return { start, end };
+      });
+
+      const active = occurrences
+        .filter((occurrence) => timestamp >= occurrence.start && timestamp < occurrence.end)
+        .sort((a, b) => a.start - b.start)[0];
+      const upcoming = active || occurrences
+        .filter((occurrence) => occurrence.start > timestamp)
+        .sort((a, b) => a.start - b.start)[0];
 
       return {
         configured: true,
         valid: true,
-        start,
-        end,
-        description: `每天 ${settings.dailyStart}–${settings.dailyEnd}（${formatUtcOffset(offset)}）`,
+        start: upcoming.start,
+        end: upcoming.end,
+        description: `每天 ${windows.map((window) => `${window.startText}–${window.endText}`).join('、')}（${formatUtcOffset(offset)}）`,
       };
     }
 
@@ -197,6 +303,22 @@
     };
   }
 
+  function hasOverlappingDailyWindows(settings) {
+    const windows = normalizeDailyWindows(settings);
+    if (windows.length < 2) return false;
+    const intervals = [];
+    windows.forEach((window) => {
+      const length = window.end > window.start
+        ? window.end - window.start
+        : window.end + DAY_MS - window.start;
+      intervals.push({ window, start: window.start, end: window.start + length });
+      intervals.push({ window, start: window.start + DAY_MS, end: window.start + DAY_MS + length });
+    });
+    return intervals.some((a, index) => intervals.some((b, other) => index !== other
+      && a.window !== b.window
+      && a.start < b.end && b.start < a.end));
+  }
+
   function isActiveWindow(schedule, timestamp) {
     return schedule.valid && timestamp >= schedule.start && timestamp < schedule.end;
   }
@@ -204,12 +326,7 @@
   function isPreheatWindow(schedule, timestamp) {
     if (!schedule.valid || timestamp >= schedule.start) return false;
     const remaining = schedule.start - timestamp;
-    return remaining <= CONFIG.preheatBeforeMinutes * 60 * 1000
-      && remaining > PREHEAT_RELOAD_CUTOFF_MS;
-  }
-
-  function canAutoRepair(schedule, timestamp) {
-    return isActiveWindow(schedule, timestamp) || isPreheatWindow(schedule, timestamp);
+    return remaining <= CONFIG.preheatBeforeMinutes * 60 * 1000 && remaining > 0;
   }
 
   function attemptLockKey(schedule) {
@@ -228,102 +345,354 @@
     return lock && Number.isFinite(lock.clickedAt) ? lock : null;
   }
 
-  function saveAttemptLock(price, schedule) {
-    const lock = {
+  function saveAttemptLock(schedule, payload) {
+    store.set(attemptLockKey(schedule), {
       clickedAt: Date.now(),
       occurrenceStart: schedule.start,
-      price,
-      url: location.href,
-    };
-    store.set(attemptLockKey(schedule), lock);
-    purchaseClickedFor = schedule.start;
+      ...payload,
+    });
   }
 
   function resetAttemptLock() {
     const schedule = resolveSchedule(now());
     if (!readAttemptLock(schedule)) return;
     const confirmed = window.confirm(
-      '仅在确认此前没有创建订单后继续。重置后，若仍在抢购窗口且价格匹配，脚本可能再次点击立即购买。确定重置吗？',
+      '仅在确认此前没有创建订单后继续。重置后，若仍在抢购窗口且价格匹配，脚本可能再次下单。确定重置吗？',
     );
     if (!confirmed) return;
     store.remove(attemptLockKey(schedule));
-    purchaseClickedFor = null;
-    quoteStableSince = 0;
-    updateStatus('本场下单锁已重置，重新检查页面', 'waiting');
+    hunt.result = null;
+    hunt.attempts = 0;
+    updateStatus('本场下单锁已重置，重新检查', 'waiting');
     scheduleTick();
   }
 
-  /* ================= 页面元素 ================= */
+  /* ================= API 客户端 ================= */
 
-  function productMatches() {
-    const params = new URLSearchParams(location.search);
-    return (!CONFIG.productId || params.get('pid') === CONFIG.productId)
-      && (!CONFIG.sampleId || params.get('sample_id') === CONFIG.sampleId)
-      && (!CONFIG.activityId || params.get('activity_id') === CONFIG.activityId);
-  }
-
-  function findInternalNetworkCheckbox() {
-    const label = Array.from(document.querySelectorAll('label.ant-checkbox-wrapper'))
-      .find((item) => normalize(item.textContent) === '内网');
-    return label?.querySelector('input[type="checkbox"]') || null;
-  }
-
-  function findTermsCheckbox() {
-    const direct = document.querySelector('.price-order-terms input[type="checkbox"]');
-    if (direct) return direct;
-    const label = Array.from(document.querySelectorAll('label.ant-checkbox-wrapper'))
-      .find((item) => {
-        const text = normalize(item.textContent);
-        return text.includes('我已阅读并同意') && text.includes('服务条款');
+  async function apiFetch(path, { method = 'POST', payload, timeoutMs = 15000 } = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${API_BASE}${path}`, {
+        method,
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-publishable-api-key': PUBLISHABLE_KEY,
+        },
+        body: payload === undefined ? undefined : JSON.stringify(payload),
+        signal: controller.signal,
       });
-    return label?.querySelector('input[type="checkbox"]') || null;
+      let body = null;
+      try {
+        body = await response.json();
+      } catch (error) {
+        body = null;
+      }
+      return { status: response.status, ok: response.ok, body };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
-  function findBuyButton() {
-    return Array.from(document.querySelectorAll('button.price-order-btn-buy, button'))
-      .find((button) => /^(立即购买|立刻购买)$/.test(normalize(button.textContent))) || null;
+  function cycleCode() {
+    const text = String(CONFIG.expectedCycle || '');
+    for (const [pattern, code] of CYCLE_MAP) {
+      if (pattern.test(text)) return code;
+    }
+    return 'annually';
   }
 
-  function readPrice() {
-    const element = document.querySelector('.price-order-summary-price-value');
-    if (!element) return null;
-    const match = element.textContent.replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
-    if (!match) return null;
-    const value = Number(match[0]);
-    return Number.isFinite(value) ? value : null;
+  /* ---------- 登录态 ---------- */
+
+  function ensureIdentity({ maxAgeMs = 60000, force = false } = {}) {
+    if (identity.checking) return identity.checking;
+    if (!force && identity.customer && Date.now() - identity.checkedAt < maxAgeMs) {
+      return Promise.resolve(identity.customer);
+    }
+    identity.checking = apiFetch('/customers/me', { method: 'GET', timeoutMs: 10000 })
+      .then(({ status, body }) => {
+        identity.checking = null;
+        identity.checkedAt = Date.now();
+        if (status === 200 && body?.customer) {
+          identity.customer = body.customer;
+          identity.failCount = 0;
+          return identity.customer;
+        }
+        identity.customer = null;
+        identity.failCount += 1;
+        return null;
+      })
+      .catch(() => {
+        identity.checking = null;
+        identity.failCount += 1;
+        return null;
+      });
+    return identity.checking;
   }
 
-  function readCycle() {
-    return normalize(document.querySelector('.price-order-summary-price-cycle')?.textContent);
+  // 自动重登：medusa-login.php 是跨域表单 POST，浏览器 fetch 跟不了整条重定向链，
+  // 用 GM_xmlhttpRequest 走浏览器网络栈（中间跳转的 Set-Cookie 会被正常种下）。
+  function gmRequest(url, { method = 'GET', data, headers = {}, timeout = 30000 } = {}) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method,
+        url,
+        data,
+        headers,
+        timeout,
+        onload: (response) => resolve(response),
+        onerror: (error) => reject(new Error('网络错误')),
+        ontimeout: () => reject(new Error('请求超时')),
+      });
+    });
   }
 
-  function isBuyButtonDisabled(button) {
-    return !button
-      || button.disabled
-      || button.getAttribute('aria-disabled') === 'true'
-      || button.classList.contains('ant-btn-loading')
-      || Boolean(button.querySelector('.ant-btn-loading-icon'));
+  async function tryAutoRelogin() {
+    if (!CONFIG.loginEmail || !CONFIG.loginPassword) return false;
+    try {
+      await gmRequest(LOGIN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        data: `username=${encodeURIComponent(CONFIG.loginEmail)}&password=${encodeURIComponent(CONFIG.loginPassword)}`,
+      });
+      // 链路走完后验证会话
+      const customer = await ensureIdentity({ force: true });
+      return Boolean(customer);
+    } catch (error) {
+      console.warn(LOG_PREFIX, '自动重登失败', error);
+      return false;
+    }
   }
 
-  function ensureChecked(input, enabled) {
-    if (!input || input.checked || !enabled || input.disabled) return Boolean(input?.checked);
-    const current = Date.now();
-    const previous = lastCheckboxClick.get(input) || 0;
-    if (current - previous < 500) return false;
-    lastCheckboxClick.set(input, current);
-    input.click();
-    return input.checked;
+  /* ---------- 商品模板与下单参数 ---------- */
+
+  function buildConfigOptionsFromTemplate(template) {
+    const whmcs = template?.product?.metadata?.whmcs ?? {};
+    const merged = { ...DEFAULT_CONFIGOPTIONS };
+    for (const configoption of whmcs.configoptions?.configoption ?? []) {
+      const key = String(configoption.id);
+      if (merged[key] !== undefined) continue;
+      const options = configoption.options?.option ?? [];
+      if (!options.length) continue;
+      if (String(configoption.type) === '4') {
+        merged[key] = String(Number(options[0]?.qtyminimum ?? 0));
+      } else {
+        const chosen = options.find((option) => !Number(option.hidden)) ?? options[0];
+        merged[key] = chosen.id;
+      }
+    }
+    return merged;
   }
 
-  function hasOutOfStock() {
-    const text = document.body?.innerText || '';
-    return /目前该项目缺货|订购已被暂停|暂时缺货|已售罄|out of stock|sold out/i.test(text);
+  function buildCustomFields(template) {
+    const fields = {};
+    for (const customfield of template?.product?.metadata?.whmcs?.customfields?.customfield ?? []) {
+      if (customfield.name === 'private_network_enabled' && CONFIG.internalNetwork) {
+        fields[String(customfield.id)] = 'on';
+      }
+    }
+    return fields;
   }
 
-  function hasLoadingError() {
-    const text = document.body?.innerText || '';
-    return hasOutOfStock()
-      || /加载失败|请求失败|网络异常|网络错误|系统繁忙|服务不可用|Network Error|Bad Gateway|Gateway Timeout/i.test(text);
+  async function ensureProductTemplate({ force = false } = {}) {
+    if (!force && product.template && product.productId === CONFIG.productId) return product;
+    const { status, body } = await apiFetch(`/products/template/whmcs/${CONFIG.productId}`, {
+      payload: { sample_id: CONFIG.sampleId, activity_id: CONFIG.activityId },
+      timeoutMs: 30000,
+    });
+    if (status !== 200 || !body?.product) {
+      throw new Error(`获取商品模板失败（HTTP ${status}）${body?.message ? `：${body.message}` : ''}`);
+    }
+    product.template = body;
+    product.productId = CONFIG.productId;
+    product.configOptions = buildConfigOptionsFromTemplate(body);
+    product.customFields = buildCustomFields(body);
+    return product;
+  }
+
+  function buildQuoteBody() {
+    return {
+      product_id: product.template.product.id,
+      billingcycle: cycleCode(),
+      activity_id: CONFIG.activityId,
+      price_list_id: '',
+      quantity: 1,
+      language: 'chinese-cn',
+      configoptions: product.configOptions,
+      sample_id: CONFIG.sampleId,
+    };
+  }
+
+  function randomRootPw() {
+    const alphabet = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    let pw = '';
+    for (let i = 0; i < 14; i += 1) pw += alphabet[Math.floor(Math.random() * alphabet.length)];
+    return `${pw}!aA1`;
+  }
+
+  function buildOrderBody(customerId) {
+    return {
+      domain: `vps-${Math.random().toString(16).slice(2, 8)}`,
+      rootpw: randomRootPw(),
+      pid: String(CONFIG.productId),
+      product_id: product.template.product.id,
+      billingcycle: cycleCode(),
+      quantity: 1,
+      activity_id: CONFIG.activityId,
+      price_list_id: '',
+      configoptions_data: product.configOptions,
+      customfields_data: product.customFields,
+      sample_id: CONFIG.sampleId,
+      aff_id: 0,
+      aff_rtype: '',
+      language: 'chinese-cn',
+      group_id: product.template.product.metadata.whmcs.gid,
+      notes: '',
+      agree_terms: 1,
+      customer_id: customerId,
+    };
+  }
+
+  /* ---------- 报价 ---------- */
+
+  function requestQuote() {
+    if (quoteState.inFlight) return quoteState.inFlight;
+    quoteState.inFlight = apiFetch('/custom/price/get-product-price', {
+      payload: buildQuoteBody(),
+      timeoutMs: 12000,
+    })
+      .then(({ status, body }) => {
+        quoteState.inFlight = null;
+        quoteState.lastAt = Date.now();
+        if (status === 200 && body) {
+          quoteState.price = Number(body.priceoverride ?? body.discounted_price ?? body.unit_price);
+          quoteState.cycleText = normalize(body.cycle);
+          const validate = body.activity_validate;
+          quoteState.validateOk = validate ? Boolean(validate.status) : null;
+          quoteState.validateMsg = validate?.status ? '' : (validate?.msg || '活动未开始或已结束');
+          quoteState.discountIds = Array.isArray(body.use_discount_ids) ? body.use_discount_ids : [];
+        } else if (status === 401) {
+          identity.customer = null;
+          quoteState.price = null;
+          quoteState.validateOk = null;
+        } else {
+          quoteState.price = null;
+        }
+        return quoteState;
+      })
+      .catch(() => {
+        quoteState.inFlight = null;
+        return quoteState;
+      });
+    return quoteState.inFlight;
+  }
+
+  function quoteMatches() {
+    if (!Number.isFinite(quoteState.price)) return false;
+    if (Math.abs(quoteState.price - Number(CONFIG.expectedPrice)) > 0.001) return false;
+    if (CONFIG.expectedCycle && quoteState.cycleText
+      && !quoteState.cycleText.includes(normalize(CONFIG.expectedCycle))) return false;
+    return true;
+  }
+
+  /* ---------- 下单与结账 ---------- */
+
+  async function fireOrder(customerId) {
+    const { status, body } = await apiFetch('/custom/cart/add-order', {
+      payload: buildOrderBody(customerId),
+      timeoutMs: CONFIG.orderTimeoutMs,
+    });
+    return { status, body };
+  }
+
+  async function checkoutCart(cartId, customerId) {
+    return apiFetch('/custom/whmcs-cart/checkout-cart', {
+      payload: {
+        cart_id: cartId,
+        customer_id: customerId,
+        discount_ids: quoteState.discountIds ?? [],
+        consume_point: 0,
+        notes: '',
+        agree_terms: true,
+        consume_voucher_ids: [],
+        contact_id: 0,
+      },
+      timeoutMs: 25000,
+    });
+  }
+
+  function paymentUrlFromBody(body) {
+    if (!body) return null;
+    if (typeof body.invoice_url === 'string' && body.invoice_url) {
+      return body.invoice_url.includes('?')
+        ? `${body.invoice_url}&language=chinese-cn`
+        : `${body.invoice_url}?language=chinese-cn`;
+    }
+    const invoiceId = body.invoice_id ?? body.whmcs_order?.data?.invoiceid;
+    if (invoiceId) return `https://billing.raksmart.com/whmcs/viewinvoice.php?id=${invoiceId}&language=chinese-cn`;
+    return null;
+  }
+
+  async function handleOrderSuccess(schedule, body, customerId) {
+    const cartId = body.cart.id;
+    hunt.result = { cartId, at: new Date().toISOString() };
+    if (CONFIG.attemptLockEnabled) {
+      saveAttemptLock(schedule, { cartId });
+    }
+    updateStatus(`下单成功（cart ${cartId}），正在结账…`, 'locked');
+
+    let checkout = null;
+    let lastError = '';
+    // 结账超时 ≠ 失败：服务端可能已受理并在处理（重试会返回 is processing）。
+    // 对超时/处理中/5xx 轮询确认，最多 6 次；业务性错误立即停止交人工。
+    for (let attempt = 1; attempt <= 6 && !checkout; attempt += 1) {
+      try {
+        checkout = await checkoutCart(cartId, customerId);
+      } catch (error) {
+        checkout = { status: 0, body: null, error: error.message };
+      }
+      if (checkout.status === 200 || checkout.status === 202) break;
+      lastError = checkout.error
+        ?? checkout.body?.message
+        ?? JSON.stringify(checkout.body)?.slice(0, 120)
+        ?? `HTTP ${checkout.status}`;
+      const processing = /is processing/i.test(lastError);
+      const transient = processing || checkout.status === 0 || checkout.status >= 500;
+      if (!transient) break;
+      console.warn(LOG_PREFIX, `结账第 ${attempt} 次未确认（${lastError}），服务端可能仍在处理`);
+      await new Promise((resolve) => setTimeout(resolve, processing ? 5000 : 8000));
+      checkout = null;
+    }
+
+    if (!checkout) {
+      hunt.result = { cartId, checkoutError: lastError, at: new Date().toISOString() };
+      updateStatus(`⚠ 结账未确认（${lastError}）。超时的请求可能已生成订单，请立即到订单列表核对`, 'error');
+      if (CONFIG.attemptLockEnabled) {
+        saveAttemptLock(schedule, hunt.result);
+      }
+      window.open('https://billing.raksmart.com/whmcs/clientarea.php', '_blank');
+      return;
+    }
+    if (checkout.status === 200 || checkout.status === 202) {
+      const invoiceUrl = paymentUrlFromBody(checkout.body);
+      const orderId = checkout.body?.whmcs_order?.data?.orderid ?? null;
+      const invoiceId = checkout.body?.invoice_id ?? checkout.body?.whmcs_order?.data?.invoiceid ?? null;
+      hunt.result = { cartId, orderId, invoiceId, invoiceUrl, at: new Date().toISOString() };
+      updateStatus(`🎉 结账成功：订单 ${orderId ?? '—'}，账单 ${invoiceId ?? '—'}`, 'locked');
+      console.log(LOG_PREFIX, '结账成功', hunt.result);
+      if (CONFIG.attemptLockEnabled) {
+        saveAttemptLock(schedule, hunt.result);
+      }
+      if (invoiceUrl) window.open(invoiceUrl, '_blank');
+    } else {
+      hunt.result = { cartId, checkoutStatus: checkout.status, at: new Date().toISOString() };
+      updateStatus(`⚠ cart 已创建但结账返回 HTTP ${checkout.status}，请手动完成结账`, 'error');
+      if (CONFIG.attemptLockEnabled) {
+        saveAttemptLock(schedule, hunt.result);
+      }
+    }
+    scheduleTick();
   }
 
   /* ================= 设置表单 ================= */
@@ -336,6 +705,7 @@
     const input = document.createElement(type === 'select' ? 'select' : 'input');
     input.name = name;
     if (type !== 'select') input.type = type;
+    if (type === 'password') input.setAttribute('autocomplete', 'new-password');
     Object.entries(attributes).forEach(([key, attributeValue]) => {
       input.setAttribute(key, String(attributeValue));
     });
@@ -366,6 +736,61 @@
     return input;
   }
 
+  function createDailyWindowsField(form) {
+    const field = document.createElement('div');
+    field.className = 'field';
+    field.dataset.schedule = 'daily';
+    const caption = document.createElement('span');
+    caption.textContent = '每日抢购时段（可配置多个）';
+    const rows = document.createElement('div');
+    rows.className = 'window-rows';
+
+    const addRow = () => {
+      const row = document.createElement('div');
+      row.className = 'window-row';
+      const start = document.createElement('input');
+      start.type = 'time';
+      start.name = 'dailyWindowStart';
+      start.setAttribute('aria-label', '时段开始时间');
+      const end = document.createElement('input');
+      end.type = 'time';
+      end.name = 'dailyWindowEnd';
+      end.setAttribute('aria-label', '时段结束时间');
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'window-remove';
+      remove.textContent = '删除';
+      remove.setAttribute('aria-label', '删除此时段');
+      remove.addEventListener('click', () => row.remove());
+      row.append(start, end, remove);
+      rows.appendChild(row);
+      return row;
+    };
+
+    const addButton = document.createElement('button');
+    addButton.type = 'button';
+    addButton.className = 'window-add';
+    addButton.textContent = '添加时段';
+    addButton.addEventListener('click', addRow);
+
+    field.append(caption, rows, addButton);
+    form.appendChild(field);
+    return { field, rows, addRow };
+  }
+
+  function fillDailyWindowRows() {
+    if (!panel) return;
+    panel.dailyWindowRows.innerHTML = '';
+    const windows = Array.isArray(CONFIG.dailyWindows) && CONFIG.dailyWindows.length
+      ? CONFIG.dailyWindows
+      : [{}];
+    windows.forEach((window) => {
+      const row = panel.addDailyWindowRow();
+      row.querySelector('[name="dailyWindowStart"]').value = String(window?.start || '');
+      row.querySelector('[name="dailyWindowEnd"]').value = String(window?.end || '');
+    });
+  }
+
   function fillSettingsForm() {
     if (!panel) return;
     const { settingsForm } = panel;
@@ -375,14 +800,12 @@
       scheduleMode: CONFIG.scheduleMode,
       saleStart: CONFIG.saleStart,
       saleEnd: CONFIG.saleEnd,
-      dailyStart: CONFIG.dailyStart,
-      dailyEnd: CONFIG.dailyEnd,
       utcOffsetMinutes: CONFIG.utcOffsetMinutes,
       preheatBeforeMinutes: CONFIG.preheatBeforeMinutes,
-      reloadAfterSeconds: CONFIG.reloadAfterMs / 1000,
-      errorReloadAfterSeconds: CONFIG.errorReloadAfterMs / 1000,
+      orderIntervalSeconds: CONFIG.orderIntervalMs / 1000,
+      loginEmail: CONFIG.loginEmail,
+      loginPassword: '',
       attemptLockEnabled: CONFIG.attemptLockEnabled,
-      retryIntervalSeconds: CONFIG.retryIntervalMs / 1000,
       productId: CONFIG.productId,
       sampleId: CONFIG.sampleId,
       activityId: CONFIG.activityId,
@@ -392,7 +815,9 @@
       if (control.type === 'checkbox') control.checked = Boolean(value);
       else control.value = String(value ?? '');
     });
+    settingsForm.elements.namedItem('internalNetwork').checked = Boolean(CONFIG.internalNetwork);
     panel.settingsError.textContent = '';
+    fillDailyWindowRows();
     updateScheduleFields();
   }
 
@@ -425,6 +850,12 @@
     const form = event.currentTarget;
     if (!form.reportValidity()) return;
     const data = new FormData(form);
+    const dailyWindows = Array.from(form.querySelectorAll('.window-row'))
+      .map((row) => ({
+        start: String(row.querySelector('[name="dailyWindowStart"]').value).trim(),
+        end: String(row.querySelector('[name="dailyWindowEnd"]').value).trim(),
+      }))
+      .filter((window) => window.start || window.end);
     const next = {
       ...CONFIG,
       expectedPrice: Number(data.get('expectedPrice')),
@@ -432,14 +863,15 @@
       scheduleMode: String(data.get('scheduleMode')),
       saleStart: String(data.get('saleStart')).trim(),
       saleEnd: String(data.get('saleEnd')).trim(),
-      dailyStart: String(data.get('dailyStart')),
-      dailyEnd: String(data.get('dailyEnd')),
+      dailyWindows,
       utcOffsetMinutes: Number(data.get('utcOffsetMinutes')),
       preheatBeforeMinutes: Number(data.get('preheatBeforeMinutes')),
-      reloadAfterMs: Number(data.get('reloadAfterSeconds')) * 1000,
-      errorReloadAfterMs: Number(data.get('errorReloadAfterSeconds')) * 1000,
+      orderIntervalMs: Number(data.get('orderIntervalSeconds')) * 1000,
+      internalNetwork: form.elements.namedItem('internalNetwork').checked,
+      loginEmail: String(data.get('loginEmail')).trim(),
+      // 密码留空表示不修改已存值
+      ...(String(data.get('loginPassword')) ? { loginPassword: String(data.get('loginPassword')) } : {}),
       attemptLockEnabled: form.elements.namedItem('attemptLockEnabled').checked,
-      retryIntervalMs: Number(data.get('retryIntervalSeconds')) * 1000,
       productId: String(data.get('productId')).trim(),
       sampleId: String(data.get('sampleId')).trim(),
       activityId: String(data.get('activityId')).trim(),
@@ -447,12 +879,15 @@
     const schedule = resolveSchedule(Date.now(), next);
     if (schedule.configured && !schedule.valid) {
       panel.settingsError.textContent = next.scheduleMode === 'daily'
-        ? '每日时间需为有效的 HH:mm，且开始与结束时间不能相同。'
+        ? '每个每日时段都需填写有效的 HH:mm 开始与结束时间，且开始与结束不能相同。'
         : '单次时间需为带时区的 ISO 8601 格式，且结束时间晚于开始时间。';
       return;
     }
+    if (next.scheduleMode === 'daily' && hasOverlappingDailyWindows(next)) {
+      panel.settingsError.textContent = '每日各时段不能重叠（含跨天时段延伸到次日的部分）。';
+      return;
+    }
     store.set(SETTINGS_KEY, next);
-    panel.settingsForm.querySelector('[type="submit"]').disabled = true;
     location.reload();
   }
 
@@ -470,7 +905,7 @@
       [hidden] { display: none !important; }
       .panel {
         position: fixed; right: 12px; bottom: 12px; z-index: 2147483647;
-        width: min(390px, calc(100vw - 24px)); max-height: calc(100vh - 24px);
+        width: min(410px, calc(100vw - 24px)); max-height: calc(100vh - 24px);
         overflow-y: auto; padding: 14px; color: #e5e7eb;
         background: rgba(17, 24, 39, .97); border: 1px solid #4b5563;
         border-radius: 10px; box-shadow: 0 8px 30px rgba(0, 0, 0, .3);
@@ -483,6 +918,7 @@
       .status[data-state="waiting"] { color: #fcd34d; }
       .status[data-state="locked"] { color: #93c5fd; }
       .detail { color: #aeb7c4; overflow-wrap: anywhere; }
+      .link { color: #93c5fd; text-decoration: underline; cursor: pointer; }
       .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
       button {
         flex: 1; min-height: 48px; padding: 8px 10px; color: #e5e7eb;
@@ -505,6 +941,11 @@
         font: inherit; font-size: max(1rem, 1em);
       }
       .hint { margin: -4px 0 10px; color: #9ca3af; }
+      .window-rows { display: grid; gap: 8px; margin-bottom: 8px; }
+      .window-row { display: flex; gap: 8px; }
+      .window-row input { flex: 1; min-width: 0; }
+      button.window-remove { flex: 0 0 auto; width: 64px; }
+      button.window-add { width: 100%; }
       .settings-error { min-height: 20px; }
     `;
 
@@ -512,7 +953,7 @@
     root.className = 'panel';
     const title = document.createElement('div');
     title.className = 'title';
-    title.textContent = 'Raksmart 自动下单';
+    title.textContent = 'Raksmart 自动下单（API 版）';
     const status = document.createElement('div');
     status.className = 'status';
     status.setAttribute('role', 'status');
@@ -529,11 +970,14 @@
     settingsButton.textContent = '设置';
     settingsButton.setAttribute('aria-expanded', 'false');
     settingsButton.setAttribute('aria-controls', 'raksmart-settings-form');
+    const loginButton = document.createElement('button');
+    loginButton.type = 'button';
+    loginButton.textContent = '打开登录页';
     const resetButton = document.createElement('button');
     resetButton.type = 'button';
     resetButton.textContent = '重置下单锁';
     resetButton.hidden = true;
-    actions.append(pauseButton, settingsButton, resetButton);
+    actions.append(pauseButton, settingsButton, loginButton, resetButton);
 
     const settingsForm = document.createElement('form');
     settingsForm.id = 'raksmart-settings-form';
@@ -546,28 +990,26 @@
     settingsTitle.textContent = '自动下单设置（保存后刷新）';
     settingsForm.appendChild(settingsTitle);
     appendField(settingsForm, '期望价格（USD）', 'expectedPrice', 'number', '', { required: true, min: 0, step: '0.01' });
-    appendField(settingsForm, '付款周期（留空则不校验）', 'expectedCycle', 'text', '');
+    appendField(settingsForm, '付款周期（如 每年，留空则不校验）', 'expectedCycle', 'text', '');
+    appendCheckboxField(settingsForm, '勾选「内网」', 'internalNetwork');
     const scheduleMode = appendField(settingsForm, '场次类型', 'scheduleMode', 'select', 'once');
     const onceStart = appendField(settingsForm, '单次开始时间（含时区）', 'saleStart', 'text', '', { placeholder: '2026-11-15T20:00:00+08:00' });
     onceStart.dataset.schedule = 'once';
     const onceEnd = appendField(settingsForm, '单次结束时间（含时区）', 'saleEnd', 'text', '', { placeholder: '2026-11-15T20:10:00+08:00' });
     onceEnd.dataset.schedule = 'once';
-    const dailyStart = appendField(settingsForm, '每日开始时间', 'dailyStart', 'time', '');
-    dailyStart.dataset.schedule = 'daily';
-    const dailyEnd = appendField(settingsForm, '每日结束时间', 'dailyEnd', 'time', '');
-    dailyEnd.dataset.schedule = 'daily';
+    const dailyWindowsField = createDailyWindowsField(settingsForm);
     appendField(settingsForm, '每日场次的 UTC 偏移（分钟）', 'utcOffsetMinutes', 'number', '', { required: true, min: -840, max: 840, step: 1 });
-    appendField(settingsForm, '提前多少分钟开始修复', 'preheatBeforeMinutes', 'number', '', { required: true, min: 0, max: 10080, step: 1 });
-    appendField(settingsForm, '页面不完整多少秒后刷新', 'reloadAfterSeconds', 'number', '', { required: true, min: 1, max: 3600, step: 1 });
-    appendField(settingsForm, '检测到错误多少秒后刷新', 'errorReloadAfterSeconds', 'number', '', { required: true, min: 1, max: 3600, step: 1 });
-    appendCheckboxField(settingsForm, '启用防重复下单锁（关闭后可能重复创建订单）', 'attemptLockEnabled');
-    appendField(settingsForm, '关闭下单锁时的重试间隔（秒）', 'retryIntervalSeconds', 'number', '', { required: true, min: 1, max: 300, step: 1 });
-    appendField(settingsForm, '商品 pid（留空不限制）', 'productId', 'text', '');
-    appendField(settingsForm, 'sample_id（留空不限制）', 'sampleId', 'text', '');
-    appendField(settingsForm, 'activity_id（留空不限制）', 'activityId', 'text', '');
+    appendField(settingsForm, '提前多少分钟开始预热', 'preheatBeforeMinutes', 'number', '', { required: true, min: 0, max: 10080, step: 1 });
+    appendField(settingsForm, '抢购下单重试间隔（秒）', 'orderIntervalSeconds', 'number', '', { required: true, min: 0.2, max: 60, step: '0.1' });
+    appendField(settingsForm, '自动重登邮箱（可选）', 'loginEmail', 'email', '', { placeholder: '留空则会话失效时提示手动登录' });
+    appendField(settingsForm, '自动重登密码（可选，留空不修改）', 'loginPassword', 'password', '', { autocomplete: 'new-password' });
+    appendCheckboxField(settingsForm, '启用防重复下单锁（关闭后可能重复下单）', 'attemptLockEnabled');
+    appendField(settingsForm, '商品 pid', 'productId', 'text', '');
+    appendField(settingsForm, 'sample_id', 'sampleId', 'text', '');
+    appendField(settingsForm, 'activity_id', 'activityId', 'text', '');
     const hint = document.createElement('div');
     hint.className = 'hint';
-    hint.textContent = '每日结束时间早于开始时间时按跨天处理。单次开始与结束均留空可停用定时购买。';
+    hint.textContent = 'API 模式不依赖页面表单。换商品时需同步更新脚本内 DEFAULT_CONFIGOPTIONS（详见脚本头部注释）。';
     settingsForm.appendChild(hint);
     const settingsError = document.createElement('div');
     settingsError.className = 'settings-error';
@@ -586,12 +1028,14 @@
 
     pauseButton.addEventListener('click', () => {
       paused = !paused;
-      quoteStableSince = 0;
       scheduleTick();
     });
     settingsButton.addEventListener('click', () => {
       if (settingsForm.hidden) openSettings();
       else closeSettings();
+    });
+    loginButton.addEventListener('click', () => {
+      window.open('https://billing.raksmart.com/', '_blank');
     });
     resetButton.addEventListener('click', resetAttemptLock);
     scheduleMode.addEventListener('change', updateScheduleFields);
@@ -601,8 +1045,10 @@
     shadow.append(style, root);
     document.body.appendChild(host);
     panel = {
-      host, status, detail, pauseButton, settingsButton, resetButton,
+      host, status, detail, pauseButton, settingsButton, resetButton, loginButton,
       settingsForm, settingsError,
+      dailyWindowRows: dailyWindowsField.rows,
+      addDailyWindowRow: dailyWindowsField.addRow,
     };
   }
 
@@ -614,11 +1060,29 @@
     panel.pauseButton.textContent = paused ? '继续抢购' : '暂停抢购';
     panel.resetButton.hidden = !readAttemptLock();
 
-    const actualPrice = readPrice();
-    const actual = actualPrice === null ? '未读取到' : `$${actualPrice.toFixed(2)}`;
+    const loginText = identity.customer
+      ? `已登录：${identity.customer.email}`
+      : identity.failCount > 0 ? '未登录（点击「打开登录页」，登录后回到本页）' : '登录态检测中…';
+    const priceText = Number.isFinite(quoteState.price)
+      ? `$${quoteState.price.toFixed(2)} / ${quoteState.cycleText || '周期未知'}`
+      : '报价未知';
     const schedule = resolveSchedule(now());
     const saleText = schedule.valid ? schedule.description : '抢购时间未配置或无效';
-    panel.detail.textContent = `当前 ${actual}；期望 $${Number(CONFIG.expectedPrice).toFixed(2)} / ${CONFIG.expectedCycle}；${saleText}`;
+
+    panel.detail.textContent = `${loginText}｜当前报价 ${priceText}；期望 $${Number(CONFIG.expectedPrice).toFixed(2)} / ${CONFIG.expectedCycle}；${saleText}`;
+    if (hunt.result?.invoiceUrl) {
+      const link = document.createElement('a');
+      link.className = 'link';
+      link.href = hunt.result.invoiceUrl;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = `✅ 已下单，打开付款页（账单 ${hunt.result.invoiceId ?? '—'}）`;
+      panel.detail.appendChild(document.createElement('br'));
+      panel.detail.appendChild(link);
+    } else if (hunt.result?.cartId) {
+      panel.detail.appendChild(document.createTextNode(`｜cart ${hunt.result.cartId} 待结账`));
+    }
+    panel.loginButton.hidden = Boolean(identity.customer);
   }
 
   function formatCountdown(milliseconds) {
@@ -629,158 +1093,142 @@
     return hours > 0 ? `${hours}时${minutes}分${seconds}秒` : `${minutes}分${seconds}秒`;
   }
 
-  /* ================= 刷新与购买 ================= */
+  /* ================= 主循环（API 驱动） ================= */
 
-  function scheduleReload(reason, schedule = resolveSchedule(now())) {
-    const lockActive = CONFIG.attemptLockEnabled
-      && (purchaseClickedFor === schedule.start || readAttemptLock(schedule));
-    if (reloadScheduled || paused || lockActive) return;
-    if (!canAutoRepair(schedule, now())) return;
-    if (navigator.onLine === false) {
-      updateStatus('浏览器当前离线，等待网络恢复', 'error');
-      return;
-    }
-
-    const threshold = hasLoadingError() ? CONFIG.errorReloadAfterMs : CONFIG.reloadAfterMs;
-    if (Date.now() - PAGE_STARTED_AT < threshold) return;
-
-    reloadScheduled = true;
-    updateStatus(`${reason}，即将刷新页面`, 'waiting');
-    const jitter = 200 + Math.floor(Math.random() * 500);
-    setTimeout(() => {
-      const current = now();
-      const currentSchedule = resolveSchedule(current);
-      const lockActive = CONFIG.attemptLockEnabled
-        && (purchaseClickedFor === currentSchedule.start || readAttemptLock(currentSchedule));
-      if (canAutoRepair(currentSchedule, current) && !paused && !lockActive) {
-        location.reload();
-      } else {
-        reloadScheduled = false;
-      }
-    }, jitter);
-  }
-
-  function attemptPurchase(button, price, schedule) {
-    if (CONFIG.attemptLockEnabled && readAttemptLock(schedule)) {
-      purchaseClickedFor = schedule.start;
-      updateStatus('检测到本场已有点击记录，为防止重复订单已停止', 'locked');
-      return;
-    }
-
-    const elapsed = Date.now() - lastPurchaseAttemptAt;
-    if (!CONFIG.attemptLockEnabled && elapsed < CONFIG.retryIntervalMs) {
-      const remaining = Math.ceil((CONFIG.retryIntervalMs - elapsed) / 1000);
-      updateStatus(`下单锁已关闭，${remaining} 秒后重试点击`, 'waiting');
-      return;
-    }
-
-    lastPurchaseAttemptAt = Date.now();
-    if (CONFIG.attemptLockEnabled) {
-      saveAttemptLock(price, schedule);
-      updateStatus(`价格 $${price.toFixed(2)} 匹配，已点击立即购买；请确认后续页面`, 'locked');
-    } else {
-      purchaseClickedFor = null;
-      const retrySeconds = Math.ceil(CONFIG.retryIntervalMs / 1000);
-      updateStatus(`已点击立即购买；下单锁已关闭，将每 ${retrySeconds} 秒重试`, 'waiting');
-    }
-    console.log(LOG_PREFIX, '点击立即购买', { price, url: location.href, time: new Date().toISOString() });
-    button.click();
-  }
-
-  /* ================= 主循环 ================= */
-
-  function tick() {
+  async function tick() {
     try {
       createPanel();
-      if (!productMatches()) {
-        updateStatus('当前 URL 的商品参数与配置不一致，已停止自动操作', 'error');
-        return;
-      }
+      if (!panel) return;
 
-      const internalNetwork = findInternalNetworkCheckbox();
-      const terms = findTermsCheckbox();
-      const buyButton = findBuyButton();
-      const price = readPrice();
-      const cycle = readCycle();
-      ensureChecked(internalNetwork, CONFIG.autoCheckInternalNetwork);
-      ensureChecked(terms, CONFIG.autoAcceptTerms);
+      await ensureIdentity();
 
-      const current = now();
-      const schedule = resolveSchedule(current);
+      const schedule = resolveSchedule(now());
       if (!schedule.configured) {
-        updateStatus('请点击右下角“设置”配置单次或每日抢购时间；当前仅自动勾选', 'waiting');
+        updateStatus('请点击右下角「设置」配置单次或每日抢购时间', 'waiting');
         return;
       }
       if (!schedule.valid) {
         updateStatus('抢购时间配置无效，请打开设置修正', 'error');
         return;
       }
+
+      // 已有结果：展示并退出
+      if (hunt.result) {
+        updateStatus(hunt.result.invoiceUrl
+          ? '🎉 已完成下单与结账，请在打开的账单页付款'
+          : `cart ${hunt.result.cartId} 已创建，请手动完成结账`, 'locked');
+        return;
+      }
+      if (CONFIG.attemptLockEnabled && readAttemptLock(schedule)) {
+        updateStatus('本场已下单（检测到下单锁），已停止。可在账单列表确认结果', 'locked');
+        return;
+      }
       if (paused) {
-        updateStatus('抢购与页面修复已暂停；复选框仍会保持勾选', 'waiting');
+        updateStatus('已暂停；恢复后将按场次继续', 'waiting');
         return;
       }
-      if (CONFIG.attemptLockEnabled && (purchaseClickedFor === schedule.start || readAttemptLock(schedule))) {
-        purchaseClickedFor = schedule.start;
-        updateStatus('本场已有点击记录，为防止重复订单已停止；请确认订单结果', 'locked');
-        return;
-      }
-      if (CONFIG.scheduleMode !== 'daily' && current >= schedule.end) {
-        updateStatus('单次抢购窗口已结束，自动购买与刷新已停止', 'locked');
+      if (CONFIG.scheduleMode !== 'daily' && now() >= schedule.end) {
+        updateStatus('单次抢购窗口已结束，自动下单已停止', 'locked');
         return;
       }
 
-      const active = isActiveWindow(schedule, current);
-      const preheating = isPreheatWindow(schedule, current);
-      if (hasOutOfStock()) {
-        updateStatus(`${active ? '抢购中' : '开抢前'}：检测到缺货，等待自动刷新`, 'waiting');
-        scheduleReload('检测到缺货', schedule);
-        return;
-      }
-      const formReady = internalNetwork && terms && buyButton && price !== null;
-      if (!formReady) {
-        updateStatus(active ? '抢购中：等待表单与报价加载' : preheating ? '开抢前修复：等待表单与报价加载' : '开抢前：等待表单与报价加载', 'waiting');
-        scheduleReload(active ? '页面长时间未完整加载' : '开抢前修复：页面未完整加载', schedule);
-        return;
-      }
-      if (!internalNetwork.checked || !terms.checked) {
-        updateStatus('等待内网和服务条款勾选成功', 'waiting');
-        scheduleReload('复选框长时间未就绪', schedule);
-        return;
-      }
-      if (isBuyButtonDisabled(buyButton)) {
-        updateStatus(active ? '抢购中：购买按钮暂不可用' : '开抢前：购买按钮暂不可用', 'waiting');
-        scheduleReload('购买按钮长时间不可用', schedule);
-        return;
+      // 商品模板（含下单用配置项映射），失败会在下轮重试
+      if (!product.template) {
+        try {
+          await ensureProductTemplate();
+        } catch (error) {
+          updateStatus(`商品模板加载失败：${error.message}，将重试`, 'error');
+          return;
+        }
       }
 
-      const nextSignature = `${price}|${cycle}|${internalNetwork.checked}|${terms.checked}`;
-      if (nextSignature !== quoteSignature) {
-        quoteSignature = nextSignature;
-        quoteStableSince = Date.now();
+      const active = isActiveWindow(schedule, now());
+      const preheating = isPreheatWindow(schedule, now());
+
+      // 报价巡检：场次外低频、预热高频、抢购窗口内用下单间隔（开抢瞬间尽快发现价格翻转）
+      const quoteInterval = active
+        ? Math.max(500, CONFIG.orderIntervalMs)
+        : preheating
+          ? CONFIG.preheatQuoteIntervalMs
+          : CONFIG.idleQuoteIntervalMs;
+      if (!quoteState.inFlight && Date.now() - quoteState.lastAt > quoteInterval) {
+        requestQuote();
       }
 
       if (!active) {
-        const readyText = `页面已就绪，距开抢 ${formatCountdown(schedule.start - current)}`;
-        const priceWarning = Math.abs(price - CONFIG.expectedPrice) > 0.001 ? '；当前价与目标不同，开抢后复核' : '';
-        updateStatus(`${readyText}${priceWarning}`, 'ready');
+        const countdown = formatCountdown(schedule.start - now());
+        const validateText = quoteState.validateOk === false
+          ? `；活动暂未生效（${quoteState.validateMsg}），开抢后直接下单`
+          : '';
+        const priceWarning = Number.isFinite(quoteState.price) && !quoteMatches()
+          ? '；当前报价与期望不同，开抢后仍会复核再下单'
+          : '';
+        updateStatus(`${preheating ? '预热中' : '待命'}：距开抢 ${countdown}${validateText}${priceWarning}`, preheating ? 'ready' : 'waiting');
         return;
       }
 
-      if (CONFIG.expectedCycle && !cycle.includes(normalize(CONFIG.expectedCycle))) {
-        updateStatus(`付款周期不符（当前 ${cycle || '未知'}），已阻止购买`, 'error');
-        return;
+      // 抢购窗口内
+      if (!identity.customer) {
+        const relogged = await tryAutoRelogin();
+        if (!relogged) {
+          updateStatus('抢购窗口内但登录态失效！请立即登录后回到本页', 'error');
+          return;
+        }
       }
-      if (Math.abs(price - CONFIG.expectedPrice) > 0.001) {
-        updateStatus(`价格不符（当前 $${price.toFixed(2)}），已阻止购买`, 'error');
-        return;
-      }
-      if (Date.now() - quoteStableSince < CONFIG.quoteStableMs) {
-        updateStatus('价格匹配，等待报价稳定', 'ready');
+
+      if (!quoteMatches()) {
+        const reason = !Number.isFinite(quoteState.price)
+          ? '报价未知'
+          : quoteState.validateOk === false
+            ? `活动未生效：${quoteState.validateMsg}`
+            : `价格不符（$${quoteState.price.toFixed(2)}）`;
+        updateStatus(`抢购中：${reason}，继续刷新报价`, 'error');
+        if (!quoteState.inFlight) requestQuote();
         return;
       }
 
-      updateStatus('价格与付款周期匹配，准备点击立即购买', 'ready');
-      attemptPurchase(buyButton, price, schedule);
+      // 价格与周期匹配 → 开火（单发在途，避免重复创建订单）
+      const elapsed = Date.now() - hunt.lastOrderAt;
+      if (hunt.inFlightOrder || elapsed < CONFIG.orderIntervalMs) {
+        updateStatus(`价格匹配（$${quoteState.price.toFixed(2)}），${hunt.inFlightOrder ? '下单请求在途' : `${Math.ceil((CONFIG.orderIntervalMs - elapsed) / 1000) || '0.1'} 秒后下单`}`, 'ready');
+        return;
+      }
+
+      hunt.inFlightOrder = true;
+      hunt.lastOrderAt = Date.now();
+      hunt.attempts += 1;
+      const attemptNo = hunt.attempts;
+      updateStatus(`价格匹配，提交订单（第 ${attemptNo} 次）`, 'ready');
+
+      try {
+        const { status, body } = await fireOrder(identity.customer.id);
+        if (status === 200 && body?.cart?.id) {
+          await handleOrderSuccess(schedule, body, identity.customer.id);
+          return;
+        }
+        if (status === 401) {
+          identity.customer = null;
+          const relogged = await tryAutoRelogin();
+          hunt.lastError = relogged ? '会话过期，已自动重登，重试下单' : '会话过期，请手动登录';
+        } else {
+          const message = body?.message || body?.error || `HTTP ${status}`;
+          hunt.lastError = String(message);
+          if (!/库存不足|售罄|sold out|out of stock/i.test(hunt.lastError)
+            && attemptNo <= 3) {
+            console.warn(LOG_PREFIX, '下单返回异常', { status, body });
+          }
+        }
+      } catch (error) {
+        hunt.lastError = `网络异常：${error.message}（该请求可能已到达服务端，请稍后在账单列表确认）`;
+        console.warn(LOG_PREFIX, hunt.lastError);
+      } finally {
+        hunt.inFlightOrder = false;
+      }
+
+      const outOfStock = /库存不足|售罄|sold out|out of stock/i.test(hunt.lastError);
+      updateStatus(outOfStock
+        ? `抢购中：库存不足（已尝试 ${attemptNo} 次），继续重试`
+        : `抢购中：${hunt.lastError}，继续重试`, outOfStock ? 'ready' : 'error');
     } catch (error) {
       console.error(LOG_PREFIX, '执行异常', error);
       updateStatus(`脚本执行异常：${error.message}`, 'error');
@@ -790,18 +1238,17 @@
   function scheduleTick() {
     if (scheduled) return;
     scheduled = true;
-    setTimeout(() => {
+    setTimeout(async () => {
       scheduled = false;
-      tick();
+      await tick();
     }, 50);
   }
 
   if (typeof GM_registerMenuCommand === 'function') {
     GM_registerMenuCommand('打开自动下单设置', openSettings);
     GM_registerMenuCommand('重置本场自动下单锁', resetAttemptLock);
-    GM_registerMenuCommand('暂停 / 继续抢购与页面修复', () => {
+    GM_registerMenuCommand('暂停 / 继续抢购', () => {
       paused = !paused;
-      quoteStableSince = 0;
       scheduleTick();
     });
     GM_registerMenuCommand('恢复默认设置（保留下单锁）', () => {
@@ -811,17 +1258,7 @@
     });
   }
 
-  const observer = new MutationObserver(scheduleTick);
-  observer.observe(document, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['class', 'disabled'],
-  });
   document.addEventListener('DOMContentLoaded', scheduleTick, { once: true });
-  document.addEventListener('visibilitychange', scheduleTick);
-  window.addEventListener('focus', scheduleTick);
-  window.addEventListener('pageshow', scheduleTick);
-  setInterval(tick, 250);
-  tick();
+  setInterval(scheduleTick, 500);
+  scheduleTick();
 })();
