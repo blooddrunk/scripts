@@ -1,0 +1,6313 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta content="IE=edge,chrome=1" http-equiv="X-UA-Compatible">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>API Reference</title>
+<base href="https://account.lightlayer.net/index.php?/userapi" />
+<link href="https://account.lightlayer.net/includes/modules/Other/userapi/user/slate/stylesheets/screen.css" rel="stylesheet" type="text/css" media="screen" />
+<link href="https://account.lightlayer.net/includes/modules/Other/userapi/user/slate/stylesheets/print.css" rel="stylesheet" type="text/css" media="print" />
+<link href="https://account.lightlayer.net/includes/modules/Other/userapi/user/slate/stylesheets/railscasts.css" rel="stylesheet" type="text/css" media="screen" />
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.0/jquery.min.js"></script>
+<script src="https://account.lightlayer.net/includes/modules/Other/userapi/user/slate/javascripts/all.min.js" type="text/javascript"></script>
+<script src="https://account.lightlayer.net/includes/modules/Other/userapi/user/slate/javascripts/highlight.pack.js"></script>
+<script>hljs.initHighlightingOnLoad();</script>
+<script>
+                $(function () {
+                    setupLanguages(["bash","php","python"]);
+                    $('.lang-selector').children('a').first().click();
+                });
+            </script>
+</head>
+<body class="index">
+<a href="#" id="nav-button">
+<span>
+NAV
+<img src="https://account.lightlayer.net/includes/modules/Other/userapi/user/slate/images/navbar.png" />
+</span>
+</a>
+<div class="tocify-wrapper">
+LIGHTLAYER
+<div class="lang-selector">
+<a data-language-name="bash">bash</a>
+<a data-language-name="php">php</a>
+<a data-language-name="python">python</a>
+</div>
+<div class="search">
+<input type="text" class="search" id="input-search" placeholder="Search">
+</div>
+<ul class="search-results"></ul>
+<div id="toc">
+</div>
+<ul class="toc-footer">
+<li><a href='https://account.lightlayer.net/'>Back to client portal</a></li>
+</ul>
+</div>
+<div class="page-wrapper">
+<div class="dark-box"></div>
+<div class="content">
+<h1 id='introduction'>Introduction</h1>
+<p>
+Our HTTP <a href="https://en.wikipedia.org/wiki/Representational_state_transfer"
+target="_blank">REST API</a> allows you to manage vital details of your account and
+services in client portal. <a href="http://www.json.org/" target="_blank">JSON</a> is used for
+all API returns
+</p>
+<p>
+Use left menu to browse trough available methods, use right menu to check required parameters,
+data to post and code samples in various languages.
+</p>
+<p>
+<b>Swagger Doc:</b> You can <a href="https://account.lightlayer.net/?cmd=userapi&action=swagger">download</a>
+or <a id="display" href="https://account.lightlayer.net/?cmd=userapi&action=swagger&display=true"
+target="_blank">display</a> the JSON to generate documentation in <b>Swagger</b>.
+</p>
+<h1 id='authentication'>Authentication</h1>
+<h2 id="jwt_auth">JSON Web Token Authentication</h2>
+<pre><code class="language-bash">curl 'https://account.lightlayer.net/api/login' \
+    -d username="username"\
+    -d password="password"
+
+# grab authentication token from the response and pass it in Authorization header
+curl 'https://account.lightlayer.net/api/details' \
+    -H "Authorization: Bearer $token"
+</code></pre>
+<pre><code class="language-php">$resp = $client-&gt;post('login', [
+    'form_params' =&gt; [
+        'username' =&gt; 'username',
+        'password' =&gt; 'password'
+    ]
+]);
+
+$token = $resp-&gt;json()['token'];
+
+$resp = $client-&gt;get('details', [
+    'headers' =&gt; [
+        'Authorization' =&gt; 'Bearer ' . $token
+    ]
+]);
+
+echo $resp-&gt;getBody();</code></pre>
+<pre><code class="language-python">payload = username
+resp = requests.post('https://account.lightlayer.net/api/login', data=payload)
+
+headers = {
+    'Authorization': 'Bearer ' + req.json().token
+}
+resp = requests.get('https://account.lightlayer.net/api/details', headers=headers)
+print(resp)</code></pre>
+<blockquote>
+<p>Make sure to replace <code>username</code> and <code>password</code> with your client area details.</p>
+</blockquote>                    <p>
+To authenticate, you need to send a <a href="https://jwt.io/">JSON Web Token (JWT)</a>
+in the authorization header of the HTTP request.
+</p>
+<p>
+To obtain the authorization <code>token</code> you need to submit a request with your username and password
+to <code class="prettyprint">POST https://account.lightlayer.net/api/login</code> API method
+</p>
+<p>
+All API calls that require authentication expect HTTP header in the form of
+<code>Authorization: Bearer &lt;token&gt;</code>.
+</p>
+<p>For example:<br />
+<code class="prettyprint" style="word-break: break-all;">Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJpc...</code>
+</p>
+<h2 id="basic_auth">Basic Authentication</h2>
+<pre><code class="language-bash"># pass the correct header with each request (-u option)
+curl 'https://account.lightlayer.net/api/details' \
+    -u "username:password"</code></pre>
+<pre><code class="language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' =&gt; 'https://account.lightlayer.net/api/',
+    'auth' =&gt; ['username', 'password']
+]);
+
+$resp = $client-&gt;get('details');</code></pre>
+<pre><code class="language-python"># python requests module handles basic authentication if provided with auth parameter
+payload = username
+req = requests.get('https://account.lightlayer.net/api/details', auth=('username', 'password'))
+print(req.json())</code></pre>
+<blockquote>
+<p>Make sure to replace <code>username</code> and <code>password</code> with your client area details.</p>
+</blockquote>                    <p>
+This authentication method requires that you send your client area username (email address) and
+password with each request.
+</p>
+<p>
+API calls that require authentication expect a header in the form of
+<code>Authorization: Basic &lt;credentials&gt;</code>, where credentials is the Base64 encoding
+of username and password joined by a single colon <code>:</code>.
+</p>
+<p>For example:<br />
+<code class="prettyprint">Authorization: Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==</code></p>
+<p>
+You can find more info on this authentication method here:
+<a href="https://en.wikipedia.org/wiki/Basic_access_authentication"
+target="_blank">Basic HTTP Authentication</a>
+</p>
+<p>
+<aside class="notice">
+You must replace <code class="prettyprint">QWxhZGRpbjpvcGVuIHNlc2FtZQ==</code> with base64
+encoded version of your access details.
+</aside>
+</p>
+<p>
+<aside class="warning">
+For security, we highly recommend to issue API calls over
+<a href="http://en.wikipedia.org/wiki/HTTP_Secure" target="_blank">HTTPS</a>
+</aside>
+</p>
+<h1 id="clientarea-0">Clientarea</h1>
+<h2 id="login-1">Login</h2>
+<p>Generate new authorization token</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"username\": \"user@example.com\",
+    \"password\": \"secret\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/login" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+]);
+
+$options = [
+    'json' => [
+        "username" => "user@example.com",
+        "password" => "secret"
+    ]
+]
+$resp = $client->post('login', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'username': "user@example.com",
+    'password': "secret"
+}
+
+
+req = requests.post('https://account.lightlayer.net/api/login', json=payload)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJodHRw(...)5lZ9T79ft9uwOkqRRmIBbtR51_w",
+    "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIzMD(...)ChwIAb3zvxBu6kvULa2AwAt9U-I"
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /login</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">username</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Your acount email address </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">password</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Account password </p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="logout-2">Logout</h2>
+<p>Invalidate authorization token</p>
+<pre><code class="highlight bash language-bash">
+curl -X POST "https://account.lightlayer.net/api/logout" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->post('logout');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/logout', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "status": true
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /logout</code>
+</p>
+<h2 id="refresh-token-3">Refresh Token</h2>
+<p>Generate new authorization token using refresh token</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"refresh_token\": \"refresh_tokenValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+]);
+
+$options = [
+    'json' => [
+        "refresh_token" => "refresh_tokenValue"
+    ]
+]
+$resp = $client->post('token', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'refresh_token': "refresh_tokenValue"
+}
+
+
+req = requests.post('https://account.lightlayer.net/api/token', json=payload)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJodHR(...)vY2xlYiHGvauCWZD9B0VwXgHEzXDllqY",
+    "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJBQ(...)Rmivc_u3YA_kgDqOPtUuGNXOzueXYtZw"
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /token</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">refresh_token</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Refresh token previously obtained from <code>POST /login</code></p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="revoke-token-4">Revoke Token</h2>
+<p>Invalidate authorization and refresh token.
+Pass refresh token or call this method with valid access token</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"refresh_token\": \"refresh_tokenValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/revoke" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+]);
+
+$options = [
+    'json' => [
+        "refresh_token" => "refresh_tokenValue"
+    ]
+]
+$resp = $client->post('revoke', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'refresh_token': "refresh_tokenValue"
+}
+
+
+req = requests.post('https://account.lightlayer.net/api/revoke', json=payload)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "status": true
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /revoke</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">refresh_token</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="user-details-5">User Details</h2>
+<p>Return registration details for my account</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/details" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('details');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/details', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "client": {
+        "id": "26",
+        "email": "api@example.com",
+        "lastlogin": "2016-12-30 12:24:28",
+        "ip": "172.100.2.1",
+        "host": "hostname",
+        "firstname": "Joe",
+        "lastname": "Doe",
+        "companyname": "",
+        "address1": "Pretty View Lane",
+        "address2": "3294",
+        "city": "Santa Rosa",
+        "state": "California",
+        "postcode": "95401",
+        "country": "US",
+        "phonenumber": "+1.24123123"
+    }
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /details</code>
+</p>
+<h2 id="password-reset-6">Password Reset</h2>
+<p>Request password reset email for account</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"email\": \"emailValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/passwordreset" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+]);
+
+$options = [
+    'json' => [
+        "email" => "emailValue"
+    ]
+]
+$resp = $client->post('passwordreset', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'email': "emailValue"
+}
+
+
+req = requests.post('https://account.lightlayer.net/api/passwordreset', json=payload)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "info": [
+        "generated_reset_request"
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /passwordreset</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">email</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>EMail address</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="update-user-details-7">Update User Details</h2>
+<p>Update registration details under my account</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"email\": \"emailValue\",
+    \"firstname\": \"firstnameValue\",
+    \"lastname\": \"lastnameValue\",
+    \"companyname\": \"companynameValue\",
+    \"address1\": \"address1Value\",
+    \"address2\": \"address2Value\",
+    \"city\": \"cityValue\",
+    \"state\": \"stateValue\",
+    \"postcode\": \"postcodeValue\",
+    \"country\": \"countryValue\",
+    \"phonenumber\": \"phonenumberValue\",
+    \"type\": \"typeValue\",
+    \"telegramnotifications\": \"telegramnotificationsValue\",
+    \"ticketsubmitters\": \"ticketsubmittersValue\"
+}"
+
+curl -X PUT "https://account.lightlayer.net/api/details" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "email" => "emailValue",
+        "firstname" => "firstnameValue",
+        "lastname" => "lastnameValue",
+        "companyname" => "companynameValue",
+        "address1" => "address1Value",
+        "address2" => "address2Value",
+        "city" => "cityValue",
+        "state" => "stateValue",
+        "postcode" => "postcodeValue",
+        "country" => "countryValue",
+        "phonenumber" => "phonenumberValue",
+        "type" => "typeValue",
+        "telegramnotifications" => "telegramnotificationsValue",
+        "ticketsubmitters" => "ticketsubmittersValue"
+    ]
+]
+$resp = $client->put('details', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'email': "emailValue",
+    'firstname': "firstnameValue",
+    'lastname': "lastnameValue",
+    'companyname': "companynameValue",
+    'address1': "address1Value",
+    'address2': "address2Value",
+    'city': "cityValue",
+    'state': "stateValue",
+    'postcode': "postcodeValue",
+    'country': "countryValue",
+    'phonenumber': "phonenumberValue",
+    'type': "typeValue",
+    'telegramnotifications': "telegramnotificationsValue",
+    'ticketsubmitters': "ticketsubmittersValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.put('https://account.lightlayer.net/api/details', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "client": {
+        "id": "26",
+        "email": "api@example.com",
+        "lastlogin": "2016-12-30 12:34:20",
+        "ip": "172.100.2.1",
+        "host": "hostname",
+        "firstname": "Joe",
+        "lastname": "Doe",
+        "companyname": "",
+        "address1": "Pretty View Lane",
+        "address2": "3194",
+        "city": "Santa Rosa",
+        "state": "California",
+        "postcode": "95401",
+        "country": "US",
+        "phonenumber": "+1.24123123"
+    },
+    "info": [
+        "client_info_updated"
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">PUT /details</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">email</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Email Address</p>
+<p>
+Value pattern: <code>^(?!.*(?:lightlayer|test))[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)?@[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$/i</code>
+</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">firstname</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>First Name</p>
+<p>
+Value pattern: <code>^(?!.*(?:lightlayer|test)).*$/i</code>
+</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">lastname</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Last Name</p>
+<p>
+Value pattern: <code>^(?!.*(?:lightlayer|test)).*$/i</code>
+</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">companyname</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Organization</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">address1</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Address 1</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">address2</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Address 2</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">city</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>City</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">state</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>State</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">postcode</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Post code</p>
+<p>
+Value pattern: <code>^\d+$</code>
+</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">country</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Country</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">phonenumber</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Phone</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">type</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Account Type</p>
+<p>
+Available values:
+<code>Private</code>,                                                                                                                     <code>Company</code>.                                                                                                            </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">telegramnotifications</td>
+<td><code class="param-type">string[]</code></td>
+<td class="param-description">
+<p>Telegram notifications</p>
+<p>
+Available values:
+<code>Yes</code>.                                                                                                            </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">ticketsubmitters</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Allowed ticket domain submitters - Comma separated list of domains or emails allowed to submit tickets on your behalf</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="user-logs-8">User Logs</h2>
+<p>Returns logs from history</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/logs" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('logs');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/logs', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /logs</code>
+</p>
+<h2 id="list-contacts-23">List contacts</h2>
+<p>Return a list of contacts on this account</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/contact" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('contact');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/contact', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "contacts": [
+        {
+            "email": "mary@example.com",
+            "id": "49",
+            "firstname": "Mary",
+            "lastname": "Sue",
+            "companyname": "",
+            "company": "0",
+            "lastlogin": "0000-00-00 00:00:00"
+        }
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /contact</code>
+</p>
+<h2 id="add-contact-24">Add contact</h2>
+<p>Create new contact account, if password is provided you
+can use provided email addres to login as that contact.</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"password\": \"passwordValue\",
+    \"privileges\": \"privilegesValue\",
+    \"email\": \"emailValue\",
+    \"firstname\": \"firstnameValue\",
+    \"lastname\": \"lastnameValue\",
+    \"companyname\": \"companynameValue\",
+    \"address1\": \"address1Value\",
+    \"address2\": \"address2Value\",
+    \"city\": \"cityValue\",
+    \"state\": \"stateValue\",
+    \"postcode\": \"postcodeValue\",
+    \"country\": \"countryValue\",
+    \"phonenumber\": \"phonenumberValue\",
+    \"type\": \"typeValue\",
+    \"telegramnotifications\": \"telegramnotificationsValue\",
+    \"ticketsubmitters\": \"ticketsubmittersValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/contact" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "password" => "passwordValue",
+        "privileges" => "privilegesValue",
+        "email" => "emailValue",
+        "firstname" => "firstnameValue",
+        "lastname" => "lastnameValue",
+        "companyname" => "companynameValue",
+        "address1" => "address1Value",
+        "address2" => "address2Value",
+        "city" => "cityValue",
+        "state" => "stateValue",
+        "postcode" => "postcodeValue",
+        "country" => "countryValue",
+        "phonenumber" => "phonenumberValue",
+        "type" => "typeValue",
+        "telegramnotifications" => "telegramnotificationsValue",
+        "ticketsubmitters" => "ticketsubmittersValue"
+    ]
+]
+$resp = $client->post('contact', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'password': "passwordValue",
+    'privileges': "privilegesValue",
+    'email': "emailValue",
+    'firstname': "firstnameValue",
+    'lastname': "lastnameValue",
+    'companyname': "companynameValue",
+    'address1': "address1Value",
+    'address2': "address2Value",
+    'city': "cityValue",
+    'state': "stateValue",
+    'postcode': "postcodeValue",
+    'country': "countryValue",
+    'phonenumber': "phonenumberValue",
+    'type': "typeValue",
+    'telegramnotifications': "telegramnotificationsValue",
+    'ticketsubmitters': "ticketsubmittersValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/contact', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "contact_id": "1",        
+    "info": [
+        "profile_added"
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /contact</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">password</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Optional, allows you to login as contact</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">privileges</td>
+<td><code class="param-type">array</code></td>
+<td class="param-description">
+<p>Array with privileges that you want to enable. Formatted the same way as output from <code>GET&nbsp;/contact/privileges</code></p>
+</td>
+</tr>
+<tr>
+<td class="param-name">email</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Email Address</p>
+<p>
+Value pattern: <code>^(?!.*(?:lightlayer|test))[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)?@[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$/i</code>
+</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">firstname</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>First Name</p>
+<p>
+Value pattern: <code>^(?!.*(?:lightlayer|test)).*$/i</code>
+</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">lastname</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Last Name</p>
+<p>
+Value pattern: <code>^(?!.*(?:lightlayer|test)).*$/i</code>
+</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">companyname</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Organization</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">address1</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Address 1</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">address2</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Address 2</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">city</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>City</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">state</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>State</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">postcode</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Post code</p>
+<p>
+Value pattern: <code>^\d+$</code>
+</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">country</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Country</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">phonenumber</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Phone</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">type</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Account Type</p>
+<p>
+Available values:
+<code>Private</code>,                                                                                                                     <code>Company</code>.                                                                                                            </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">telegramnotifications</td>
+<td><code class="param-type">string[]</code></td>
+<td class="param-description">
+<p>Telegram notifications</p>
+<p>
+Available values:
+<code>Yes</code>.                                                                                                            </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">ticketsubmitters</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Allowed ticket domain submitters - Comma separated list of domains or emails allowed to submit tickets on your behalf</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="contact-privileges-25">Contact privileges</h2>
+<p>List possible contact privileges.
+Each domain and service may list additional privileges, depending on available features.<br /></p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/contact/privileges" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('contact/privileges');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/contact/privileges', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "privileges": {
+        "billing": [
+            "emails", // Receive billing notifications
+            "payinvoice", // Allow to view/pay invoices
+            "orders", // Allow to place new orders
+            "balance", // View account balance
+            "addfunds", // Add account funds
+            "creditcard" // Edit Credit Card details
+        ],
+        "support": [
+            "newticket", // Open new tickets
+            "tickets", // View all tickets
+            "closeticket", // Close tickets
+            "emails" // Receive email notifications from support
+        ],
+        "misc": [
+            "editmain", // Modify main profile details
+            "emails", // View emails history
+            "editipaccess", // Edit allowed IP access
+            "manageprofiles", // Add / Edit contacts
+            "affiliates" // Access affiliates section
+        ],
+        "services": {
+            "full": 1, // Full control over services
+            "332": [
+                "basic", // View basic details
+                "billing", // View billing info
+                "cancelation", // Request cancellation
+                "upgrade", // Upgrade / Downgrade
+                "notify", // Receive related email notifications  
+                (...)
+                "logindetails"
+            ]
+        },
+        "domains": {
+            "full": 1, // Full control over domains
+            "523": [
+                "basic", // View basic details
+                "renew", // Renew domain
+                "notify", // Receive related email notifications  
+                "contactinfo", // Contact Information
+                (...)
+                "nameservers" // Manage Nameservers
+            ]
+        }
+    }
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /contact/privileges</code>
+</p>
+<h2 id="get-contacts-details-26">Get contacts details</h2>
+<p>Return array with contact details</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/contact/@id" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('contact/@id');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/contact/@id', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "contact": {
+        "id": "49",
+        "email": "mary@example.com",
+        "firstname": "Mary",
+        "lastname": "Sue",
+        "companyname": "",
+        "address1": "Pretty View Lane",
+        "address2": "3194",
+        "city": "Santa Rosa",
+        "state": "California",
+        "postcode": "95401",
+        "country": "US",
+        "phonenumber": "+1.24123123",
+        "type": "Private",
+        "privileges" : {
+            "support" : ["tickets", "newticket"]
+        }
+    }
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /contact/@id</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Contact ID</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="edit-contact-27">Edit contact</h2>
+<p>Change contact details`</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"id\": \"idValue\",
+    \"privileges\": \"privilegesValue\",
+    \"email\": \"emailValue\",
+    \"firstname\": \"firstnameValue\",
+    \"lastname\": \"lastnameValue\",
+    \"companyname\": \"companynameValue\",
+    \"address1\": \"address1Value\",
+    \"address2\": \"address2Value\",
+    \"city\": \"cityValue\",
+    \"state\": \"stateValue\",
+    \"postcode\": \"postcodeValue\",
+    \"country\": \"countryValue\",
+    \"phonenumber\": \"phonenumberValue\",
+    \"type\": \"typeValue\",
+    \"telegramnotifications\": \"telegramnotificationsValue\",
+    \"ticketsubmitters\": \"ticketsubmittersValue\"
+}"
+
+curl -X PUT "https://account.lightlayer.net/api/contact/@id" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "id" => "idValue",
+        "privileges" => "privilegesValue",
+        "email" => "emailValue",
+        "firstname" => "firstnameValue",
+        "lastname" => "lastnameValue",
+        "companyname" => "companynameValue",
+        "address1" => "address1Value",
+        "address2" => "address2Value",
+        "city" => "cityValue",
+        "state" => "stateValue",
+        "postcode" => "postcodeValue",
+        "country" => "countryValue",
+        "phonenumber" => "phonenumberValue",
+        "type" => "typeValue",
+        "telegramnotifications" => "telegramnotificationsValue",
+        "ticketsubmitters" => "ticketsubmittersValue"
+    ]
+]
+$resp = $client->put('contact/@id', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'id': "idValue",
+    'privileges': "privilegesValue",
+    'email': "emailValue",
+    'firstname': "firstnameValue",
+    'lastname': "lastnameValue",
+    'companyname': "companynameValue",
+    'address1': "address1Value",
+    'address2': "address2Value",
+    'city': "cityValue",
+    'state': "stateValue",
+    'postcode': "postcodeValue",
+    'country': "countryValue",
+    'phonenumber': "phonenumberValue",
+    'type': "typeValue",
+    'telegramnotifications': "telegramnotificationsValue",
+    'ticketsubmitters': "ticketsubmittersValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.put('https://account.lightlayer.net/api/contact/@id', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "info": [
+        "profile_updated"
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">PUT /contact/@id</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Contact ID</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">privileges</td>
+<td><code class="param-type">array</code></td>
+<td class="param-description">
+<p>Array with privileges that you want to enable. Formatted the same way as output from <code>GET&nbsp;/contact/privileges</code></p>
+</td>
+</tr>
+<tr>
+<td class="param-name">email</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Email Address</p>
+<p>
+Value pattern: <code>^(?!.*(?:lightlayer|test))[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)?@[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$/i</code>
+</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">firstname</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>First Name</p>
+<p>
+Value pattern: <code>^(?!.*(?:lightlayer|test)).*$/i</code>
+</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">lastname</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Last Name</p>
+<p>
+Value pattern: <code>^(?!.*(?:lightlayer|test)).*$/i</code>
+</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">companyname</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Organization</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">address1</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Address 1</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">address2</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Address 2</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">city</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>City</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">state</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>State</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">postcode</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Post code</p>
+<p>
+Value pattern: <code>^\d+$</code>
+</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">country</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Country</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">phonenumber</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Phone</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">type</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Account Type</p>
+<p>
+Available values:
+<code>Private</code>,                                                                                                                     <code>Company</code>.                                                                                                            </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">telegramnotifications</td>
+<td><code class="param-type">string[]</code></td>
+<td class="param-description">
+<p>Telegram notifications</p>
+<p>
+Available values:
+<code>Yes</code>.                                                                                                            </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">ticketsubmitters</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Allowed ticket domain submitters - Comma separated list of domains or emails allowed to submit tickets on your behalf</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="list-all-portal-notifications-60">List all portal notifications</h2>
+<p>Return a list of all portal notifications.</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/notifications" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('notifications');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/notifications', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /notifications</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">rel_type</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Optional, return only by relation type</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">rel_id</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Optional, return only by relation id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="list-new-portal-notifications-61">List new portal notifications</h2>
+<p>Return only new portal notifications.</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/notifications/new" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('notifications/new');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/notifications/new', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /notifications/new</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">rel_type</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Optional, return only by relation type</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">rel_id</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Optional, return only by relation id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="acknowledge-notification-62">Acknowledge notification</h2>
+<p>Marks the notification as read</p>
+<pre><code class="highlight bash language-bash">
+curl -X PUT "https://account.lightlayer.net/api/notifications/@id/ack" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->put('notifications/@id/ack');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.put('https://account.lightlayer.net/api/notifications/@id/ack', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">PUT /notifications/@id/ack</code>
+</p>
+<h2 id="returns-a-list-of-all-statuses-with-specific-status-92">Returns a list of all statuses with specific status</h2>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/statuses" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('statuses');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/statuses', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /statuses</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">status</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="returns-details-of-status-93">Returns details of status</h2>
+<pre><code class="highlight bash language-bash">
+curl -X PUT "https://account.lightlayer.net/api/statuses/@id" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->put('statuses/@id');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.put('https://account.lightlayer.net/api/statuses/@id', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">PUT /statuses/@id</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+</td>
+</tr>
+</tbody>
+</table>
+<h1 id="billing-9">Billing</h1>
+<h2 id="account-balance-10">Account balance</h2>
+<p>Get current account balance(unpaid invoices total), account credit</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/balance" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('balance');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/balance', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    {
+        "success": true,
+        "details": {
+            "currency": "USD",
+            "acc_balance": "123456.55",
+            "acc_credit": "0.00"
+        }
+    }
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /balance</code>
+</p>
+<h2 id="list-invoices-11">List Invoices</h2>
+<p>List all invoices under my account</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/invoice" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('invoice');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/invoice', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "invoices": [
+        {
+            "id": "308976",
+            "date": "2016-12-30",
+            "dateorig": "2016-12-30",
+            "duedate": "2017-01-06",
+            "paybefore": "2017-01-06",
+            "total": "19.65",
+            "datepaid": "2016-12-30 12:40:47",
+            "status": "Paid",
+            "merge_id": null,
+            "number": "2016\/12\/1",
+            "currency": "USD"
+        }
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /invoice</code>
+</p>
+<h2 id="invoice-details-12">Invoice Details</h2>
+<p>Get invoice details</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/invoice/@id" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('invoice/@id');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/invoice/@id', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "invoice": {
+        "id": "308976",
+        "status": "Paid",
+        "date": "2016-12-30",
+        "duedate": "2017-01-06",
+        "paybefore": "2017-01-06",
+        "datepaid": "2016-12-30 12:40:47",
+        "subtotal": 16.24,
+        "credit": 0,
+        "tax": 3.41,
+        "taxrate": 21,
+        "tax2": 0,
+        "taxrate2": 0,
+        "taxexempt": "0",
+        "total": 19.65,
+        "rate": 1,
+        "rate2": 0,
+        "rate3": 1,
+        "notes": "",
+        "items": [
+            {
+                "id": "12305",
+                "invoice_id": "308976",
+                "type": "Other",
+                "item_id": "0",
+                "description": "Example Service",
+                "amount": "15.00",
+                "taxed": "1",
+                "qty": "1.00",
+                "linetotal": "15.00"
+            },
+            {
+                "id": "12309",
+                "invoice_id": "308976",
+                "type": "Other",
+                "item_id": "-2",
+                "description": "PayPal Payment Fee",
+                "amount": "1.24",
+                "taxed": "1",
+                "qty": "1.00",
+                "linetotal": "1.24"
+            }
+        ],
+        "client": {
+            "id": "26",
+            "email": "api@example.com",
+            "firstname": "Joe",
+            "lastname": "Doe",
+            "companyname": "",
+            "address1": "Pretty View Lane",
+            "address2": "3194",
+            "city": "Santa Rosa",
+            "state": "California",
+            "postcode": "95401",
+            "country": "US",
+            "phonenumber": "+1.24123123"
+        },
+        "number": "2016\/12\/1",
+        "currency": "USD"
+    }
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /invoice/@id</code>
+</p>
+<h2 id="apply-credit-13">Apply credit</h2>
+<p>Apply account credit to invoice</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"amount\": \"amountValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/invoice/@id/credit" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "amount" => "amountValue"
+    ]
+]
+$resp = $client->post('invoice/@id/credit', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'amount': "amountValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/invoice/@id/credit', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "success": true,
+    "invoice_status": "Paid",
+    "applied": 2.1
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /invoice/@id/credit</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">amount</td>
+<td><code class="param-type">number</code></td>
+<td class="param-description">
+<p>Optional credit amount, when no value is specified maximum amount to fully pay the invoice will be used</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="payment-methods-30">Payment Methods</h2>
+<p>List available payment methods</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/payment" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('payment');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/payment', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "payments": {
+        "10": "BankTransfer",
+        "9": "PayPal"
+    }
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /payment</code>
+</p>
+<h2 id="payment-methods-fees-31">Payment Methods Fees</h2>
+<p>List available payment methods with fees</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/payment/fees" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('payment/fees');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/payment/fees', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "payments": [
+        {
+            "id": 1,
+            "name": "Bank Transfer",
+            "fixed_fee": "0.0",
+            "percent_fee": "0.0",
+        },
+        {
+            "id": 2,
+            "name": "Stripe",
+            "fixed_fee": "0.5",
+            "percent_fee": "2.9",
+        },
+        {
+            "id": 4,
+            "name": "Credit Card",
+            "fixed_fee": "0.1",
+            "percent_fee": "2.4"
+        },
+        {
+            "id": 5,
+            "name": "PayPal",
+            "fixed_fee": "0.3",
+            "percent_fee": "2.9"
+        }
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /payment/fees</code>
+</p>
+<h2 id="get-add-funds-information-32">Get Add Funds Information</h2>
+<p>Get add funds configuration: minimum and maximum deposit amounts and available payment gateways</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/addfunds" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('addfunds');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/addfunds', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+ "min_amount": 10.00,
+ "max_amount": 1000.00,
+ "gateways": [
+   {"id": 1, "name": "Bank Transfer"},
+   {"id": 2, "name": "PayPal"}
+ ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /addfunds</code>
+</p>
+<h2 id="add-funds-33">Add Funds</h2>
+<p>Generate add funds invoice</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"amount\": \"100.00\",
+    \"gateway\": \"gatewayValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/addfunds" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "amount" => "100.00",
+        "gateway" => "gatewayValue"
+    ]
+]
+$resp = $client->post('addfunds', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'amount': "100.00",
+    'gateway': "gatewayValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/addfunds', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+ "success": true,
+ "invoice_id": 123
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /addfunds</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">amount</td>
+<td><code class="param-type">number</code></td>
+<td class="param-description">
+<p>Amount to add to account </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">gateway</td>
+<td><code class="param-type">number</code></td>
+<td class="param-description">
+<p>Payment gateway ID, use <code>GET /addfunds</code> to list available gateways</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="invoice-pdf-68">Invoice PDF</h2>
+<p>Get specific invoice PDF as base64 string</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/invoice/@id/pdf" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('invoice/@id/pdf');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/invoice/@id/pdf', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /invoice/@id/pdf</code>
+</p>
+<h1 id="support-14">Support</h1>
+<h2 id="list-tickets-15">List Tickets</h2>
+<p>List support tickets under my account</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/tickets" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('tickets');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/tickets', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "tickets": [
+        {
+            "client_read": "1",
+            "ticket_number": "736633",
+            "date": "2016-12-30 12:48:13",
+            "deptname": "Billing",
+            "subject": "Lore Ipsum",
+            "status": "Open",
+            "lastreply": "2020-09-12 11:10:03"
+        }
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /tickets</code>
+</p>
+<h2 id="ticket-details-16">Ticket details</h2>
+<p>Get ticket details, including all replies</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/tickets/@number" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('tickets/@number');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/tickets/@number', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "ticket": {
+        "date": "2016-12-30 12:48:13",
+        "ticket_number": "736633",
+        "name": "Joe Doe",
+        "email": "api@example.com",
+        "subject": "Lore Ipsum",
+        "body": "Donec sollicitudin molestie malesuada. \r\nSed porttitor lectus nibh. Vivamus magna justo, \r\nlacinia eget consectetur sed, convallis at tellus.",
+        "status": "Answered",
+        "client_read": "1",
+        "deptname": "Billing"
+    },
+    "replies": [
+        {
+            "id": "929",
+            "name": "Suppport Staff",
+            "date": "2016-12-30 12:51:04",
+            "body": "Vestibulum ac diam sit amet quam \r\nvehicula elementum sed sit amet dui. \r\nPraesent sapien massa\r\n\r\n-- Maecenas efficitur elit est --",
+            "status": "Sent",
+            "type": "Admin"
+        }
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /tickets/@number</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">number</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Ticket number</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="ticket-attachment-17">Ticket attachment</h2>
+<p>Get ticket attachment</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/ticket/attachment/@file" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('ticket/attachment/@file');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/ticket/attachment/@file', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /ticket/attachment/@file</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">number</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Ticket number</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">file</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Attachment id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="create-ticket-18">Create Ticket</h2>
+<p>Submit new ticket</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"dept_id\": 1,
+    \"subject\": \"Subject\",
+    \"body\": \"Message ...\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/tickets" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "dept_id" => 1,
+        "subject" => "Subject",
+        "body" => "Message ..."
+    ]
+]
+$resp = $client->post('tickets', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'dept_id': 1,
+    'subject': "Subject",
+    'body': "Message ..."
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/tickets', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "ticket": 865650
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /tickets</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">dept_id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Department id </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">subject</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Ticket subject </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">body</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Ticket message </p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="create-reply-19">Create Reply</h2>
+<p>Reply to ticket</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"number\": \"numberValue\",
+    \"body\": \"reply text ..\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/tickets/@number" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "number" => "numberValue",
+        "body" => "reply text .."
+    ]
+]
+$resp = $client->post('tickets/@number', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'number': "numberValue",
+    'body': "reply text .."
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/tickets/@number', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "info": [
+        "reply_added"
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /tickets/@number</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">number</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Ticket number</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">body</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Reply message </p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="re-open-ticket-20">Re-open ticket</h2>
+<p>Try to re-open closed ticket</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"number\": \"numberValue\"
+}"
+
+curl -X PUT "https://account.lightlayer.net/api/tickets/@number/open" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "number" => "numberValue"
+    ]
+]
+$resp = $client->put('tickets/@number/open', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'number': "numberValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.put('https://account.lightlayer.net/api/tickets/@number/open', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "status": true
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">PUT /tickets/@number/open</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">number</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Ticket number</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="close-ticket-21">Close ticket</h2>
+<p>Send request to close a ticket</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"number\": \"numberValue\"
+}"
+
+curl -X PUT "https://account.lightlayer.net/api/tickets/@number/close" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "number" => "numberValue"
+    ]
+]
+$resp = $client->put('tickets/@number/close', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'number': "numberValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.put('https://account.lightlayer.net/api/tickets/@number/close', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "status": true
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">PUT /tickets/@number/close</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">number</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Ticket number</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="list-ticket-departments-22">List ticket departments</h2>
+<p>Get the list of ticket departments</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/ticket/departments" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('ticket/departments');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/ticket/departments', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /ticket/departments</code>
+</p>
+<h2 id="list-news-63">List News</h2>
+<p>List News</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/news" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('news');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/news', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /news</code>
+</p>
+<h2 id="get-news-item-64">Get news item</h2>
+<p>Returns details of the news item</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/news/@news_id" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('news/@news_id');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/news/@news_id', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /news/@news_id</code>
+</p>
+<h2 id="list-all-knowledgebase-categories-65">List all knowledgebase categories</h2>
+<p>Returns list all knowledgebase categories</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/knowledgebase" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('knowledgebase');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/knowledgebase', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /knowledgebase</code>
+</p>
+<h2 id="get-knowledgebase-category-details-66">Get knowledgebase category details</h2>
+<p>Returns subcategories and articles of the knowledgebase category</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/knowledgebase/@category_id" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('knowledgebase/@category_id');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/knowledgebase/@category_id', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /knowledgebase/@category_id</code>
+</p>
+<h2 id="get-knowledgebase-article-67">Get knowledgebase article</h2>
+<p>Returns an article details</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/knowledgebase/article/@article_id" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('knowledgebase/article/@article_id');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/knowledgebase/article/@article_id', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /knowledgebase/article/@article_id</code>
+</p>
+<h1 id="domains-28">Domains</h1>
+<h2 id="get-registered-nameservers-29">Get registered nameservers</h2>
+<p>List registered private/glue nameservers for a domain.
+Note: Not all domain registrar modules support returning registered nameservers.
+If the module does not support this feature, an empty list may be returned.</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/domain/@id/reg" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('domain/@id/reg');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/domain/@id/reg', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /domain/@id/reg</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Domain id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h1 id="ssl-certificates-34">SSL Certificates</h1>
+<h2 id="list-ssl-certificates-35">List SSL Certificates</h2>
+<p>List all ssl services under your account</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/certificate" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('certificate');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/certificate', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "sslservices": [
+        {
+            "id": "300",
+            "domain": "examplename.com",
+            "total": "27.85",
+            "status": "Pending",
+            "billingcycle": "Annually",
+            "next_due": "2017-12-30",
+            "category": "GoGetSSL",
+            "category_url": "gogetssl",
+            "name": "Comodo InstantSSL",
+            "cert_email": "admin@example.com",
+            "cert_status": "",
+            "cert_expires": "2017-12-30 13:43:12"
+        }
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /certificate</code>
+</p>
+<h2 id="certificate-details-36">Certificate details</h2>
+<p>Return details for certificate <code>@service_id</code></p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/certificate/@service_id" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('certificate/@service_id');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/certificate/@service_id', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "service": {
+        "id": "300",
+        "date_created": "2016-12-30",
+        "domain": "examplename.com",
+        "firstpayment": "27.85",
+        "total": "27.85",
+        "billingcycle": "Annually",
+        "next_due": "2017-12-30",
+        "next_invoice": "2017-10-31",
+        "status": "Pending",
+        "label": "",
+        "name": "Comodo InstantSSL",
+        "cert_status": "",
+        "cert_expires": "2017-12-30 13:43:12",
+        "csr": "-----BEGIN CERTIFICATE REQUEST----- ...",
+        "contacts": {
+            "admin": {
+                "FName": "Mary",
+                "LName": "Sue",
+                "City": "Santa Rosa",
+                "State": "California",
+                "PostalCode": "95401",
+                "EmailAddress": "mary@example.com",
+                "Country": "US",
+                "Address1": "Pretty View Lane",
+                "Address2": "3194",
+                "Phone": 24123223,
+                "OrgName": "n\/a",
+                "PreFix": 1,
+                "JobTitle": "n\/a"
+            },
+            "billing": {
+                (...)
+            },
+            "tech": {
+                (...)
+            }
+        },
+        "organization": {
+            "state": "Texas",
+            "country": "US",
+            "name": "My Org name",
+            "unit": "Dev",
+            "locality": "SanAntonio",
+            "postalcode": "n\/a",
+            "address2": "n\/a",
+            "address1": "n\/a",
+        },
+        "cert_email": "admin@example.com",
+        "software": "1"
+    }
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /certificate/@service_id</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">service_id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Service id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="download-certificate-37">Download certificate</h2>
+<p>Return X.509 certificate data</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/certificate/@service_id/crt" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('certificate/@service_id/crt');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/certificate/@service_id/crt', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /certificate/@service_id/crt</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">service_id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Service id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="list-available-certificates-38">List available certificates</h2>
+<p>Return a list with certificate available for purchase</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/certificate/order" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('certificate/order');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/certificate/order', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "products": [
+        {
+            "id": "25",
+            "name": "InstantSSL",
+            "description": "",
+            "periods": [
+                {
+                    "years": 1,
+                    "price": 27.85,
+                    "renew": 27.85
+                },
+                {
+                    "years": 2,
+                    "price": 48.75,
+                    "renew": 48.75
+                }
+            ],
+            "category": "SSL Certificates",
+            "category_url": "sslcertificates"
+        },
+        (...)
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /certificate/order</code>
+</p>
+<h2 id="list-server-software-for-certificates-39">List server software for certificates</h2>
+<p>Return a list with software IDs required or certificate</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/certificate/order/@product_id/software" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('certificate/order/@product_id/software');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/certificate/order/@product_id/software', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "software": [
+        {
+            "id": 0,
+            "name": "AOL"
+        },
+        {
+            "id": 1,
+            "name": "Apache-SSL (Ben-SSL, not Stronghold)"
+        },
+        (...)
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /certificate/order/@product_id/software</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">product_id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Certificate product ID</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="order-new-certificates-40">Order new certificates</h2>
+<p>Create new order for a certificate</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"product_id\": \"product_idValue\",
+    \"csr\": \"example.com\",
+    \"years\": \"yearsValue\",
+    \"pay_method\": \"pay_methodValue\",
+    \"approver_email\": \"approver_emailValue\",
+    \"admin\": \"adminValue\",
+    \"tech\": \"techValue\",
+    \"billing\": \"billingValue\",
+    \"organization\": \"organizationValue\",
+    \"software\": \"softwareValue\",
+    \"data\": \"dataValue\",
+    \"aff_id\": 55
+}"
+
+curl -X POST "https://account.lightlayer.net/api/certificate/order" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "product_id" => "product_idValue",
+        "csr" => "example.com",
+        "years" => "yearsValue",
+        "pay_method" => "pay_methodValue",
+        "approver_email" => "approver_emailValue",
+        "admin" => "adminValue",
+        "tech" => "techValue",
+        "billing" => "billingValue",
+        "organization" => "organizationValue",
+        "software" => "softwareValue",
+        "data" => "dataValue",
+        "aff_id" => 55
+    ]
+]
+$resp = $client->post('certificate/order', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'product_id': "product_idValue",
+    'csr': "example.com",
+    'years': "yearsValue",
+    'pay_method': "pay_methodValue",
+    'approver_email': "approver_emailValue",
+    'admin': "adminValue",
+    'tech': "techValue",
+    'billing': "billingValue",
+    'organization': "organizationValue",
+    'software': "softwareValue",
+    'data': "dataValue",
+    'aff_id': 55
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/certificate/order', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "order_num": 873340994,
+    "invoice_id": "308978",
+    "total": "27.85",
+    "items": {
+        "id": "10",
+        "type": "Hosting",
+        "name": "test.com",
+        "product_id": "3"
+    }
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /certificate/order</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">product_id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Certificate product ID</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">csr</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Domain name </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">years</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Number of years</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">pay_method</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Payment method ID</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">approver_email</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Email addres used in domain validation</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">admin</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Admin contact ID</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">tech</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Tech contact ID</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">billing</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Billing contact ID</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">organization</td>
+<td><code class="param-type">array</code></td>
+<td class="param-description">
+<p>Organization details</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">software</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Server/Software ID</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">data</td>
+<td><code class="param-type">array</code></td>
+<td class="param-description">
+<p>Addditional data required for some products</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">aff_id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Affiliate ID</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h1 id="services-41">Services</h1>
+<h2 id="list-services-42">List services</h2>
+<p>List all services under your account</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "services": [
+        {
+            "id": "301",
+            "domain": "examplename.com",
+            "total": "9.99",
+            "status": "Pending",
+            "billingcycle": "Monthly",
+            "next_due": "2017-12-30",
+            "category": "Hosting",
+            "category_url": "hosting",
+            "name": "Starter Hosting"
+        }
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service</code>
+</p>
+<h2 id="service-details-43">Service details</h2>
+<p>Return details for service <code>@id</code></p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "service": {
+        "id": "301",
+        "date_created": "2016-12-30",
+        "domain": "examplename.com",
+        "firstpayment": "9.99",
+        "total": "9.99",
+        "billingcycle": "Monthly",
+        "next_due": "2017-12-30",
+        "next_invoice": "2017-01-27",
+        "status": "Active",
+        "label": "",
+        "username": "examplen",
+        "password": "pdtzc",
+        "name": "Starter Hosting"
+    }
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Service id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="list-service-methods-44">List service methods</h2>
+<p>List methods available for service</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/methods" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/methods');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/methods', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "methods": [
+        {
+            "name": "Upgrade Request",
+            "method": "POST",
+            "route": "\/service\/@id\/upgrade"
+        },
+        {
+            "name": "Upgrade Options",
+            "method": "GET",
+            "route": "\/service\/@id\/upgrade"
+        },
+        {
+            "name": "Change service label",
+            "method": "POST",
+            "route": "\/service\/@id\/label"
+        },
+        {
+            "name": "Service label",
+            "method": "GET",
+            "route": "\/service\/@id\/label"
+        },
+        {
+            "name": "Cancel Service",
+            "method": "POST",
+            "route": "\/service\/@id\/cancel"
+        }
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/methods</code>
+</p>
+<h2 id="upgrade-options-45">Upgrade Options</h2>
+<p>List upgrade options</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/upgrade" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/upgrade');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/upgrade', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "resources": [
+        {
+            "id": 1557,
+            "name": "Bandwidth",
+            "type": "select",
+            "items": [
+                {
+                    "id": "9953",
+                    "name": "100 GB",
+                    "price": 1,
+                    "setup_price": 0,
+                    "selected": true
+                },
+                {
+                    "id": "10103",
+                    "name": "500 GB",
+                    "price": 5,
+                    "setup_price": 0,
+                    "selected": false
+                },
+                {
+                    "id": "10104",
+                    "name": "1 TB",
+                    "price": 10,
+                    "setup_price": 0,
+                    "selected": false
+                }
+            ]
+        }
+    ],
+    "package": []
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/upgrade</code>
+</p>
+<h2 id="upgrade-request-46">Upgrade Request</h2>
+<p>Estimate or request upgrade</p>
+<pre><code class="language-json">// Format of ''resources'' paremeter
+{
+    "resource_id" : "qty_value", // sliders &amp; qty fields
+    "resource_id" : "item_id", // dropdown &amp; radio fields
+    "resource_id" : {
+        "item_id": "qty_value" // dropdown with qty field
+    }
+}</code></pre>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"id\": \"idValue\",
+    \"resources\": \"resourcesValue\",
+    \"package\": \"packageValue\",
+    \"cycle\": \"cycleValue\",
+    \"send\": \"sendValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/upgrade" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "id" => "idValue",
+        "resources" => "resourcesValue",
+        "package" => "packageValue",
+        "cycle" => "cycleValue",
+        "send" => "sendValue"
+    ]
+]
+$resp = $client->post('service/@id/upgrade', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'id': "idValue",
+    'resources': "resourcesValue",
+    'package': "packageValue",
+    'cycle': "cycleValue",
+    'send': "sendValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/upgrade', json=payload, headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/upgrade</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Service id</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">resources</td>
+<td><code class="param-type">array</code></td>
+<td class="param-description">
+<p>array with resource values</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">package</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>New package id, optonal when upgrading resources</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">cycle</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>New billing cycle, optonal when upgrading resources</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">send</td>
+<td><code class="param-type">boolean</code></td>
+<td class="param-description">
+<p>Set to true when you want to send your upgrade request</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="cancel-service-54">Cancel Service</h2>
+<p>Request service cancellation</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"id\": \"idValue\",
+    \"immediate\": \"immediateValue\",
+    \"reason\": \"reasonValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/cancel" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "id" => "idValue",
+        "immediate" => "immediateValue",
+        "reason" => "reasonValue"
+    ]
+]
+$resp = $client->post('service/@id/cancel', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'id': "idValue",
+    'immediate': "immediateValue",
+    'reason': "reasonValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/cancel', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+  "info": [
+    "cancell_sent"
+  ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/cancel</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Service id</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">immediate</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>set to <code>false</code> to terminate service at the end of billing date, <code>true</code> - terminate immediately</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">reason</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Reason for this request</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="service-label-55">Service label</h2>
+<p>Show current service label</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/label" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/label');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/label', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "label": "example"
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/label</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Service id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="change-service-label-56">Change service label</h2>
+<p>Set new custom label to identify this service</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"id\": \"idValue\",
+    \"label\": \"labelValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/label" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "id" => "idValue",
+        "label" => "labelValue"
+    ]
+]
+$resp = $client->post('service/@id/label', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'id': "idValue",
+    'label': "labelValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/label', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "success": true,
+    "info": [
+        "label_updated"
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/label</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Service id</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">label</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>New label</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="manual-service-renew-57">Manual Service Renew</h2>
+<p>Generate an invoice to renew the service.</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"id\": \"idValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/renew" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "id" => "idValue"
+    ]
+]
+$resp = $client->post('service/@id/renew', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'id': "idValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/renew', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "status": true,
+    "invoice_id": "504426",
+    "info": [
+        "manualrenew_ok"
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/renew</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Service id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="list-billing-cycle-58">List Billing Cycle</h2>
+<p>Get recurring billing cycle options</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/cycle" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/cycle');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/cycle', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "current": "m",
+    "cycles": {
+        "m": "14.95",
+        "a": "179.40",
+        "b": "358.80"
+    }
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/cycle</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Service id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="change-billing-cycle-59">Change Billing Cycle</h2>
+<p>Change recurring billing cycle for the service</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"id\": \"idValue\",
+    \"cycle\": \"cycleValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/cycle" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "id" => "idValue",
+        "cycle" => "cycleValue"
+    ]
+]
+$resp = $client->post('service/@id/cycle', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'id': "idValue",
+    'cycle': "cycleValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/cycle', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "success": true,
+    "info": [
+        "changebillingcycle_ok"
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/cycle</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Service id</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">cycle</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>New billing cycle</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="list-vms-69">List VMs</h2>
+<p>List virtual servers</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/vms" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/vms');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/vms', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/vms</code>
+</p>
+<h2 id="get-vm-details-70">Get VM Details</h2>
+<p>Get the details of a particular virtual server</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/vms/@vmid" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/vms/@vmid');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/vms/@vmid', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/vms/@vmid</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">vmid</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Virtual server  id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="create-vm-71">Create VM</h2>
+<p>Add new virtual server</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"label\": \"labelValue\",
+    \"template\": \"templateValue\",
+    \"memory\": \"memoryValue\",
+    \"cpu\": \"cpuValue\",
+    \"disk\": \"diskValue\",
+    \"interface\": \"interfaceValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/vms" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "label" => "labelValue",
+        "template" => "templateValue",
+        "memory" => "memoryValue",
+        "cpu" => "cpuValue",
+        "disk" => "diskValue",
+        "interface" => "interfaceValue"
+    ]
+]
+$resp = $client->post('service/@id/vms', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'label': "labelValue",
+    'template': "templateValue",
+    'memory': "memoryValue",
+    'cpu': "cpuValue",
+    'disk': "diskValue",
+    'interface': "interfaceValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/vms', json=payload, headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/vms</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">label</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>VM label</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">template</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Template ID</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">memory</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Amount of RAM memory in MB</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">cpu</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Amount of CPU cores</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">disk</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Disk Space in GB</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">interface</td>
+<td><code class="param-type">array</code></td>
+<td class="param-description">
+<p>Interface configuration</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="resize-vm-72">Resize VM</h2>
+<p>Edit a virtual server</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"vmid\": \"vmidValue\",
+    \"memory\": \"memoryValue\",
+    \"cpu\": \"cpuValue\"
+}"
+
+curl -X PUT "https://account.lightlayer.net/api/service/@id/vms/@vmid" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "vmid" => "vmidValue",
+        "memory" => "memoryValue",
+        "cpu" => "cpuValue"
+    ]
+]
+$resp = $client->put('service/@id/vms/@vmid', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'vmid': "vmidValue",
+    'memory': "memoryValue",
+    'cpu': "cpuValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.put('https://account.lightlayer.net/api/service/@id/vms/@vmid', json=payload, headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">PUT /service/@id/vms/@vmid</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">vmid</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Virtual server  id</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">memory</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Amount of RAM in MB</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">cpu</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Amount of CPU cores</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="stop-vm-73">Stop VM</h2>
+<p>Stop virtual server</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"vmid\": \"vmidValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/vms/@vmid/stop" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "vmid" => "vmidValue"
+    ]
+]
+$resp = $client->post('service/@id/vms/@vmid/stop', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'vmid': "vmidValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/vms/@vmid/stop', json=payload, headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/vms/@vmid/stop</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">vmid</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Virtual server  id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="start-vm-74">Start VM</h2>
+<p>Start virtual server</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"vmid\": \"vmidValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/vms/@vmid/start" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "vmid" => "vmidValue"
+    ]
+]
+$resp = $client->post('service/@id/vms/@vmid/start', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'vmid': "vmidValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/vms/@vmid/start', json=payload, headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/vms/@vmid/start</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">vmid</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Virtual server  id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="shutdown-vm-75">Shutdown VM</h2>
+<p>Perform graceful shutdown</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"vmid\": \"vmidValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/vms/@vmid/shutdown" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "vmid" => "vmidValue"
+    ]
+]
+$resp = $client->post('service/@id/vms/@vmid/shutdown', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'vmid': "vmidValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/vms/@vmid/shutdown', json=payload, headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/vms/@vmid/shutdown</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">vmid</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Virtual server  id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="reboot-vm-76">Reboot VM</h2>
+<p>Reboot virtual server</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"vmid\": \"vmidValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/vms/@vmid/reboot" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "vmid" => "vmidValue"
+    ]
+]
+$resp = $client->post('service/@id/vms/@vmid/reboot', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'vmid': "vmidValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/vms/@vmid/reboot', json=payload, headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/vms/@vmid/reboot</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">vmid</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Virtual server  id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="reset-vm-77">Reset VM</h2>
+<p>Reset virtual server power</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"vmid\": \"vmidValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/vms/@vmid/reset" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "vmid" => "vmidValue"
+    ]
+]
+$resp = $client->post('service/@id/vms/@vmid/reset', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'vmid': "vmidValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/vms/@vmid/reset', json=payload, headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/vms/@vmid/reset</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">vmid</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Virtual server  id</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="change-vm-hostname-78">Change VM Hostname</h2>
+<p>Update virtual machine hostname</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"hostname\": \"hostnameValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/vms/@vmid/hostname" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "hostname" => "hostnameValue"
+    ]
+]
+$resp = $client->post('service/@id/vms/@vmid/hostname', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'hostname': "hostnameValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/vms/@vmid/hostname', json=payload, headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/vms/@vmid/hostname</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">hostname</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>New hostname for the VM</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="rebuild-vm-79">Rebuild VM</h2>
+<p>Rebuild server, you can get list of templates supported by this server
+using '''/service/$id/templates'''</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"template\": \"templateValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/vms/@vmid/rebuild" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "template" => "templateValue"
+    ]
+]
+$resp = $client->post('service/@id/vms/@vmid/rebuild', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'template': "templateValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/vms/@vmid/rebuild', json=payload, headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/vms/@vmid/rebuild</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">template</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Template ID</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="list-ips-80">List IPs</h2>
+<p>List virtual machine IPs</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/vms/@vmid/ips" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/vms/@vmid/ips');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/vms/@vmid/ips', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/vms/@vmid/ips</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">type</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>ipv4 or ipv6</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">iface</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Interface number [optional]</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">bridge</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Bridge name [optional, ignored if interface provided]</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="list-ip-pools-81">List IP Pools</h2>
+<p>List IP pools for a specific interface or network bridge</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/vms/@vmid/ippool" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/vms/@vmid/ippool');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/vms/@vmid/ippool', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/vms/@vmid/ippool</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">iface</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Interface number [optional]</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">bridge</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Bridge name [optional, ignored if interface provided]</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="allocate-ips-82">Allocate IPs</h2>
+<p>Allocate new IP for network interface.</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"pool\": \"poolValue\",
+    \"type\": \"typeValue\",
+    \"iface\": \"ifaceValue\",
+    \"bridge\": \"bridgeValue\",
+    \"number\": \"numberValue\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/vms/@vmid/ippool/@pool" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "pool" => "poolValue",
+        "type" => "typeValue",
+        "iface" => "ifaceValue",
+        "bridge" => "bridgeValue",
+        "number" => "numberValue"
+    ]
+]
+$resp = $client->post('service/@id/vms/@vmid/ippool/@pool', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'pool': "poolValue",
+    'type': "typeValue",
+    'iface': "ifaceValue",
+    'bridge': "bridgeValue",
+    'number': "numberValue"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/vms/@vmid/ippool/@pool', json=payload, headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/vms/@vmid/ippool/@pool</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">pool</td>
+<td><code class="param-type">string|int</code></td>
+<td class="param-description">
+<p>List ID to allocate new IP from</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">type</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>ipv4 or ipv6</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">iface</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Interface number</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">bridge</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Bridge name [optional, ignored if interface provided]</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">number</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Number of IPs to allocate</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="list-available-networks-83">List available networks</h2>
+<p>List of networks and IP pools that can be used for VM creation</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/networks" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/networks');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/networks', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/networks</code>
+</p>
+<h2 id="list-vm-network-interfaces-84">List VM Network Interfaces</h2>
+<p>Get network interfaces assigned to virtual server</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/vms/@vmid/interfaces" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/vms/@vmid/interfaces');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/vms/@vmid/interfaces', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/vms/@vmid/interfaces</code>
+</p>
+<h2 id="get-network-interfaces-85">Get Network Interfaces</h2>
+<p>Get network Interface details</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/vms/@vmid/interfaces/@iface" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/vms/@vmid/interfaces/@iface');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/vms/@vmid/interfaces/@iface', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/vms/@vmid/interfaces/@iface</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">iface</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Interface name or id, ie '0' or 'net0'</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="update-network-interface-86">Update Network Interface</h2>
+<p>Update network interface details</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"iface\": \"ifaceValue\",
+    \"firewall\": \"firewallValue\",
+    \"ipv4\": \"ipv4Value\",
+    \"ipv6\": \"ipv6Value\"
+}"
+
+curl -X PUT "https://account.lightlayer.net/api/service/@id/vms/@vmid/interfaces/@iface" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "iface" => "ifaceValue",
+        "firewall" => "firewallValue",
+        "ipv4" => "ipv4Value",
+        "ipv6" => "ipv6Value"
+    ]
+]
+$resp = $client->put('service/@id/vms/@vmid/interfaces/@iface', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'iface': "ifaceValue",
+    'firewall': "firewallValue",
+    'ipv4': "ipv4Value",
+    'ipv6': "ipv6Value"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.put('https://account.lightlayer.net/api/service/@id/vms/@vmid/interfaces/@iface', json=payload, headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">PUT /service/@id/vms/@vmid/interfaces/@iface</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">iface</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Interface number</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">firewall</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Enable or disable firewall (may require specific permissions)</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">ipv4</td>
+<td><code class="param-type">int[]</code></td>
+<td class="param-description">
+<p>List of IP v4 IDs</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">ipv6</td>
+<td><code class="param-type">int[]</code></td>
+<td class="param-description">
+<p>List of IP v6 IDs</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="add-network-interface-87">Add Network Interface</h2>
+<p>Add new network interface to VM</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"bridge\": \"bridgeValue\",
+    \"firewall\": \"firewallValue\",
+    \"ipv4\": \"ipv4Value\",
+    \"ipv6\": \"ipv6Value\"
+}"
+
+curl -X POST "https://account.lightlayer.net/api/service/@id/vms/@vmid/interfaces" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "bridge" => "bridgeValue",
+        "firewall" => "firewallValue",
+        "ipv4" => "ipv4Value",
+        "ipv6" => "ipv6Value"
+    ]
+]
+$resp = $client->post('service/@id/vms/@vmid/interfaces', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'bridge': "bridgeValue",
+    'firewall': "firewallValue",
+    'ipv4': "ipv4Value",
+    'ipv6': "ipv6Value"
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/service/@id/vms/@vmid/interfaces', json=payload, headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /service/@id/vms/@vmid/interfaces</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">bridge</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Network bridge</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">firewall</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Enable or disable firewall (may require specific permissions)</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">ipv4</td>
+<td><code class="param-type">int[]</code></td>
+<td class="param-description">
+<p>List of IP v4 IDs</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">ipv6</td>
+<td><code class="param-type">int[]</code></td>
+<td class="param-description">
+<p>List of IP v6 IDs</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="remove-network-interface-88">Remove Network Interface</h2>
+<p>Remove network interface from VM</p>
+<pre><code class="highlight bash language-bash">
+curl -X DELETE "https://account.lightlayer.net/api/service/@id/vms/@vmid/interfaces/@iface" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->delete('service/@id/vms/@vmid/interfaces/@iface');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.delete('https://account.lightlayer.net/api/service/@id/vms/@vmid/interfaces/@iface', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">DELETE /service/@id/vms/@vmid/interfaces/@iface</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">iface</td>
+<td><code class="param-type">string|int</code></td>
+<td class="param-description">
+<p>Interface name or id to remove</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="list-os-templates-89">List OS templates</h2>
+<p>List templates that can be used to create virtual server</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/templates" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/templates');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/templates', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/templates</code>
+</p>
+<h2 id="resources-90">Resources</h2>
+<p>Show available and used resources</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/resources" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/resources');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/resources', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/resources</code>
+</p>
+<h2 id="ip-addresses-91">IP Addresses</h2>
+<p>List Service IP Addresses</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/service/@id/ip" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('service/@id/ip');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/service/@id/ip', headers=headers)
+print(req.json())</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /service/@id/ip</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Service ID</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h1 id="cart-47">Cart</h1>
+<p>Most of API methods found here will require service <code>@id</code>, you can lookup your service ids with <code>/service</code> method</p>
+<h2 id="list-product-categories-48">List product categories</h2>
+<p>Return a list of product categories.</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/category" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('category');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/category', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "categories": [
+        {
+            "id": "10",
+            "name": "Hosting",
+            "description": "",
+            "slug": "hosting"
+        },
+        {
+            "id": "6",
+            "name": "Domains",
+            "description": "",
+            "slug": "domains"
+        },
+        {
+            "id": "16",
+            "name": "Dedicated",
+            "description": "",
+            "slug": "dedicated"
+        }
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /category</code>
+</p>
+<h2 id="list-products-in-category-49">List products in category</h2>
+<p>Return a list of product available for purchase under requested category</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/category/@category_id/product" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('category/@category_id/product');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/category/@category_id/product', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "products": [
+        {
+            "id": "333",
+            "type": "1",
+            "name": "Starter Hosting",
+            "stock": false,
+            "paytype": "Regular",
+            "description": "Disk:10GB<br>Memory:2GB<br>MySql:10 DB<br>Email:100 Users<br>",
+            "qty": "0",
+            "tags": [
+
+            ],
+            "periods": [
+                {
+                    "title": "m",
+                    "value": "m",
+                    "price": 9.99,
+                    "setup": 0,
+                    "selected": true
+                },
+                {
+                    "title": "a",
+                    "value": "a",
+                    "price": 109.89,
+                    "setup": 0,
+                    "selected": false
+                },
+                {
+                    "title": "b",
+                    "value": "b",
+                    "price": 199.8,
+                    "setup": 0,
+                    "selected": false
+                },
+                {
+                    "title": "t",
+                    "value": "t",
+                    "price": 299.7,
+                    "setup": 0,
+                    "selected": false
+                }
+            ]
+        },
+        (...)
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /category/@category_id/product</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">category_id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Category ID</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="get-product-configuration-details-50">Get product configuration details</h2>
+<p>Return product details with form configuration, addons and subproducts if available.</p>
+<pre><code class="highlight bash language-bash">
+curl -X GET "https://account.lightlayer.net/api/order/@product_id" \
+   -H "Authorization: Bearer $token" </code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+
+$resp = $client->get('order/@product_id');
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.get('https://account.lightlayer.net/api/order/@product_id', headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "product": {
+        "id": "333",
+        "category_name": "Hosting",
+        "category_id": "49",
+        "name": "Starter Hosting",
+        "price": 9.99,
+        "recurring": "m",
+        "setup": 0,
+        "config": {
+            "product": [
+                {
+                    "type": "select",
+                    "title": "pickcycle",
+                    "id": "cycle",
+                    "name": "cycle",
+                    "items": [
+                        {
+                            "title": "m",
+                            "value": "m",
+                            "price": 9.99,
+                            "setup": 0,
+                            "selected": true
+                        },
+                        {
+                            "title": "a",
+                            "value": "a",
+                            "price": 109.89,
+                            "setup": 0,
+                            "selected": false
+                        },
+                        {
+                            "title": "b",
+                            "value": "b",
+                            "price": 199.8,
+                            "setup": 0,
+                            "selected": false
+                        },
+                        {
+                            "title": "t",
+                            "value": "t",
+                            "price": 299.7,
+                            "setup": 0,
+                            "selected": false
+                        }
+                    ],
+                    "value": "m",
+                    "price": 9.99,
+                    "setup": 0
+                },
+                {
+                    "type": "input",
+                    "title": "domain",
+                    "id": "domain",
+                    "name": "domain",
+                    "value": null
+                }
+            ],
+            "forms": [
+                {
+                    "type": "select",
+                    "title": "Disk Size",
+                    "id": "1618",
+                    "firstItemId": 10330,
+                    "description": "",
+                    "name": "custom[1618]",
+                    "required": false,
+                    "multiple": false,
+                    "config": {
+                        "conditionals": []
+                    },
+                    "value": [],
+                    "textvalue": [],
+                    "price": 0,
+                    "recurring_price": 0,
+                    "setup": 0,
+                    "prorata_date": null,
+                    "items": [
+                        {
+                            "title": "512MB",
+                            "value": 1,
+                            "id": 10330,
+                            "price": 0,
+                            "setup": 0,
+                            "selected": false
+                        },
+                        {
+                            "title": "1GB",
+                            "value": 1,
+                            "id": 10331,
+                            "price": 0,
+                            "setup": 0,
+                            "selected": false
+                        },
+                        {
+                            "title": "2GB",
+                            "value": 1,
+                            "id": 10332,
+                            "price": 0,
+                            "setup": 0,
+                            "selected": false
+                        }
+                    ]
+                },
+                (...)
+            ],
+            "addons": [
+                {
+                    "type": "subitem",
+                    "title": "Cpanel2: Add Extra IP",
+                    "id": "31",
+                    "value": null,
+                    "description": "Automatically adds IP address to account",
+                    "config": [
+                        {
+                            "type": "checkbox",
+                            "title": "add",
+                            "name": "addon[31]",
+                            "checked": false
+                        },
+                        {
+                            "type": "select",
+                            "title": "billingcycle",
+                            "name": "addon_cycles[31]",
+                            "items": [
+                                {
+                                    "title": "m",
+                                    "value": "m",
+                                    "price": 5,
+                                    "setup": 0,
+                                    "selected": true
+                                },
+                                {
+                                    "title": "q",
+                                    "value": "q",
+                                    "price": 20,
+                                    "setup": 0,
+                                    "selected": false
+                                },
+                                {
+                                    "title": "a",
+                                    "value": "a",
+                                    "price": 50,
+                                    "setup": 0,
+                                    "selected": false
+                                }
+                            ]
+                        }
+                    ],
+                    "price": 0,
+                    "recurring_price": 0,
+                    "setup": 0,
+                    "prorata_date": null
+                },
+                (...)
+            ],
+            "subproducts": []
+        },
+        "recurring_price": 9.99,
+        "prorata_date": null
+    }
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">GET /order/@product_id</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">product_id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Product ID</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="order-new-service-51">Order new service</h2>
+<p>Create and submit new order for selected product.</p>
+<p>To get available cycle and configuration options lookup product details
+using <code>GET /order/@product_id</code></p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"product_id\": 12,
+    \"domain\": \"example.com\",
+    \"cycle\": \"m\",
+    \"pay_method\": \"1\",
+    \"custom\": {
+        \"1618\": {
+            \"10330\": 1
+        }
+    },
+    \"promocode\": \"T346F\",
+    \"aff_id\": 55
+}"
+
+curl -X POST "https://account.lightlayer.net/api/order/@product_id" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "product_id" => 12,
+        "domain" => "example.com",
+        "cycle" => "m",
+        "pay_method" => "1",
+        "custom" => [
+            1618 => [
+                10330 => 1
+            ]
+        ],
+        "promocode" => "T346F",
+        "aff_id" => 55
+    ]
+]);
+
+$resp = $client->post('order/@product_id', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'product_id': 12,
+    'domain': "example.com",
+    'cycle': "m",
+    'pay_method': "1",
+    'custom': {
+        '1618': {
+            '10330': 1
+        }
+    },
+    'promocode': "T346F",
+    'aff_id': 55
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/order/@product_id', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "order_num": 873340995,
+    "invoice_id": "308979",
+    "total": "9.99",
+    "items": {
+        "id": "10",
+        "type": "Hosting",
+        "name": "test.com",
+        "product_id": "3"
+    }
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /order/@product_id</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">product_id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Product ID </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">domain</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Domain name, ie. example.com, may be optional</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">cycle</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Billing period symbol</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">pay_method</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Payment method ID</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">custom</td>
+<td><code class="param-type">array</code></td>
+<td class="param-description">
+<p>Additional options data available for sop products</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">promocode</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Promotion code</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">aff_id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Affiliate ID</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="order-multiple-services-52">Order multiple services</h2>
+<p>Create and submit new order for multiple services</p>
+<p>Each item in the <code>items</code> array needs to include order <code>type</code> and parameters used
+by one of the method listed below:
+<br /> &bullet; <code>POST /order/$product_id</code> - use <code>product</code> for item type<br /> &bullet; <code>POST /certificate/order</code> - use <code>certificate</code> for item type</p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"pay_method\": 1,
+    \"ignore_errors\": \"No error\",
+    \"items\": [
+        {
+            \"type\": \"product\",
+            \"product_id\": 1080,
+            \"domain\": \"hosting.com\",
+            \"cycle\": \"a\"
+        },
+        {
+            \"type\": \"certificate\",
+            \"product_id\": 840,
+            \"csr\": \"-----BEGIN CERTIFICATE REQUEST----- (...)\",
+            \"years\": 1,
+            \"approver_email\": \"admin@hosting.com\"
+        }
+    ],
+    \"aff_id\": 55
+}"
+
+curl -X POST "https://account.lightlayer.net/api/order" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "pay_method" => 1,
+        "ignore_errors" => "No error",
+        "items" => [
+            [
+                "type" => "product",
+                "product_id" => 1080,
+                "domain" => "hosting.com",
+                "cycle" => "a"
+            ],
+            [
+                "type" => "certificate",
+                "product_id" => 840,
+                "csr" => "-----BEGIN CERTIFICATE REQUEST----- (...)",
+                "years" => 1,
+                "approver_email" => "admin@hosting.com"
+            ]
+        ],
+        "aff_id" => 55
+    ]
+]
+$resp = $client->post('order', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'pay_method': 1,
+    'ignore_errors': "No error",
+    'items': [
+        {
+            'type': "product",
+            'product_id': 1080,
+            'domain': "hosting.com",
+            'cycle': "a"
+        },
+        {
+            'type': "certificate",
+            'product_id': 840,
+            'csr': "-----BEGIN CERTIFICATE REQUEST----- (...)",
+            'years': 1,
+            'approver_email': "admin@hosting.com"
+        }
+    ],
+    'aff_id': 55
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/order', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "order_num_list": [
+        179534732,
+        179534732,
+        179534732
+    ],
+    "invoice_id": "503425",
+    "total": "94.40",
+    "items": [
+        {
+            "type": "Hosting",
+            "id": "1025",
+            "name": "hosting.com",
+            "product_id": "1080"
+        },
+        {
+            "type": "Hosting",
+            "id": "1026",
+            "name": "hosting.com",
+            "product_id": "840"
+        },
+        {
+            "type": "Domain Register",
+            "id": "354",
+            "name": "hosting.com",
+            "product_id": "6"
+        }
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /order</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">pay_method</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Payment method ID </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">ignore_errors</td>
+<td><code class="param-type">bool</code></td>
+<td class="param-description">
+<p>Process order even if some of the items were rejected due to errors </p>
+</td>
+</tr>
+<tr>
+<td class="param-name">items</td>
+<td><code class="param-type">array</code></td>
+<td class="param-description">
+<p>list with order items</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">aff_id</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Affiliate ID</p>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="get-order-quote-53">Get order quote</h2>
+<p>Calculate order cost and recurring prices for selected items.
+Use the same parameters as for <code>POST /order</code></p>
+<pre><code class="highlight bash language-bash">POST_DATA="{
+    \"pay_method\": \"pay_methodValue\",
+    \"output\": \"short\",
+    \"items\": [
+        {
+            \"type\": \"product\",
+            \"product_id\": 1080,
+            \"domain\": \"hosting.com\",
+            \"cycle\": \"a\"
+        },
+        {
+            \"type\": \"certificate\",
+            \"product_id\": 840,
+            \"csr\": \"-----BEGIN CERTIFICATE REQUEST----- (...)\",
+            \"years\": 1,
+            \"approver_email\": \"admin@hosting.com\"
+        }
+    ]
+}"
+
+curl -X POST "https://account.lightlayer.net/api/quote" \
+   -H "Authorization: Bearer $token" \
+   -H "Content-Type: application/json" \
+   -d "${POST_DATA}"</code></pre>
+<pre><code class="highlight php language-php">use GuzzleHttp\Client;
+
+$client = new Client([
+    'base_uri' => 'https://account.lightlayer.net/api/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $token
+    ]
+]);
+
+$options = [
+    'json' => [
+        "pay_method" => "pay_methodValue",
+        "output" => "short",
+        "items" => [
+            [
+                "type" => "product",
+                "product_id" => 1080,
+                "domain" => "hosting.com",
+                "cycle" => "a"
+            ],
+            [
+                "type" => "certificate",
+                "product_id" => 840,
+                "csr" => "-----BEGIN CERTIFICATE REQUEST----- (...)",
+                "years" => 1,
+                "approver_email" => "admin@hosting.com"
+            ]
+        ]
+    ]
+]
+$resp = $client->post('quote', $options);
+echo $resp->getBody();</code></pre>
+<pre><code class="highlight python language-python">payload = {
+    'pay_method': "pay_methodValue",
+    'output': "short",
+    'items': [
+        {
+            'type': "product",
+            'product_id': 1080,
+            'domain': "hosting.com",
+            'cycle': "a"
+        },
+        {
+            'type': "certificate",
+            'product_id': 840,
+            'csr': "-----BEGIN CERTIFICATE REQUEST----- (...)",
+            'years': 1,
+            'approver_email': "admin@hosting.com"
+        }
+    ]
+}
+
+headers = {
+    'Authorization': 'Bearer ' + token
+}
+
+req = requests.post('https://account.lightlayer.net/api/quote', json=payload, headers=headers)
+print(req.json())</code></pre>
+<blockquote style="padding-bottom:0">
+Example Response:
+</blockquote>
+<pre><code class="highlight json">{
+    "summary": {
+        "subtotal": 72.2,
+        "total": 88.81,
+        "credit": 0,
+        "discount": 0,
+        "cost": 72.2,
+        "recurring": [
+            {
+                "title": "Annually",
+                "price": 81.18,
+                "value": "a"
+            },
+            {
+                "title": "Monthly",
+                "price": 1.48,
+                "value": "m"
+            }
+        ],
+        "tax": [
+            {
+                "name": "VAT",
+                "tax": 16.61,
+                "value": 23
+            }
+        ]
+    },
+    "items": [
+        {
+            "product": {
+                "id": 1080,
+                "category_name": "SSL",
+                "category_id": 69,
+                "name": "GeoTrust QuickSSL Premium",
+                "domain": "test.api",
+                (...)
+            },
+            "domains": {
+                (...)
+            },
+            "coupon": {},
+            "index": 0,
+            "valid": true,
+            "info": [],
+            "error": []
+        },
+        {
+            "product": {
+                "id": 840,
+                "category_name": "Proxmox",
+                "category_id": 19,
+                "name": "VPS",
+                "domain": "user.test.api",
+                (...)
+            },
+            "domains": {
+                (...)
+            },
+            "coupon": {},
+            "index": 1,
+            "valid": true,
+            "info": [],
+            "error": []
+        },
+        {
+            "product": null,
+            "domains": {
+                "hosting.com": {
+                    "id": 6,
+                    "index": 0,
+                    "category_id": "6",
+                    "category_name": "Domains",
+                    "name": "hosting.com",
+                    "tld": ".com",
+                    "period": 1,
+                    "price": "12.00",
+                    (...) 
+                }
+            },
+            "coupon": {},
+            "index": 2,
+            "valid": true,
+            "info": [],
+            "error": []
+        }
+    ]
+}</code></pre>
+<h3>HTTP Request</h3>
+<p>
+<code class="prettyprint">POST /quote</code>
+</p>
+<h3 id="query-parameters">Query Parameters</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="param-name">pay_method</td>
+<td><code class="param-type">int</code></td>
+<td class="param-description">
+<p>Payment method ID</p>
+</td>
+</tr>
+<tr>
+<td class="param-name">output</td>
+<td><code class="param-type">string</code></td>
+<td class="param-description">
+<p>Type of output, default is short. Possible options</p>
+<ul>
+<li><code>short</code> - Basic details about the item in cart</li>
+<li><code>config</code>- Basic details and form components</li>
+<li><code>full</code> - All details available in cart</li>
+</ul> 
+</td>
+</tr>
+<tr>
+<td class="param-name">items</td>
+<td><code class="param-type">array</code></td>
+<td class="param-description">
+<p>list with order items</p>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="dark-box">
+<div class="lang-selector">
+<a href="#" data-language-name="bash">bash</a>
+<a href="#" data-language-name="php">php</a>
+<a href="#" data-language-name="python">python</a>
+</div>
+</div>
+</div>
+</body>
+</html>
