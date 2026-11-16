@@ -1,0 +1,41 @@
+#!/bin/sh
+LOG=${FAKE_LOG:-}
+[ -n "$LOG" ] && printf 'ubus %s\n' "$*" >> "$LOG"
+
+case "$*" in
+    'call system board')
+        printf '{"model":"fixture-router","release":{"distribution":"Kwrt","version":"25.12-SNAPSHOT"}}\n'
+        ;;
+    'call network.interface.lan status')
+        # Real ubus pretty-prints JSON across lines with a bare numeric mask;
+        # per-line parsers must compact it first (or use jsonfilter).
+        lan_ip=${FAKE_LAN_IP:-192.168.10.1}
+        lan_mask=${FAKE_LAN_MASK:-24}
+        printf '{\n\t"up": true,\n\t"pending": false,\n\t"uptime": 123,\n\t"type": "bridge",\n\t"l3_device": "br-lan",\n\t"proto": "static",\n\t"ipv4-address": [\n\t\t{\n\t\t\t"address": "%s",\n\t\t\t"mask": %s\n\t\t}\n\t],\n\t"route": [\n\t\t{\n\t\t\t"target": "192.168.10.0",\n\t\t\t"mask": 24,\n\t\t\t"nexthop": "0.0.0.0"\n\t\t}\n\t],\n\t"inactive": null\n}\n' "$lan_ip" "$lan_mask"
+        ;;
+    'call service list'*tailscale-core*)
+        # procd reply for the project's own service; FAKE_UBUS_CORE_PID
+        # emulates a live instance, unset emulates no running instance.
+        if [ -n "${FAKE_UBUS_CORE_PID:-}" ]; then
+            printf '{\n\t"tailscale-core": {\n\t\t"instances": {\n\t\t\t"main": {\n\t\t\t\t"running": true,\n\t\t\t\t"pid": %s\n\t\t\t}\n\t\t}\n\t}\n}\n' "$FAKE_UBUS_CORE_PID"
+        else
+            printf '{\n\t"tailscale-core": {\n\t\t"instances": {}\n\t}\n}\n'
+        fi
+        ;;
+    'call service list'*tailscale*)
+        # Stock package service (autostarted by default_postinst); its init
+        # leaves the instance unnamed, so procd reports the default name.
+        if [ -n "${FAKE_UBUS_STOCK_PID:-}" ]; then
+            printf '{\n\t"tailscale": {\n\t\t"instances": {\n\t\t\t"instance1": {\n\t\t\t\t"running": true,\n\t\t\t\t"pid": %s\n\t\t\t}\n\t\t}\n\t}\n}\n' "$FAKE_UBUS_STOCK_PID"
+        else
+            printf '{\n\t"tailscale": {\n\t\t"instances": {}\n\t}\n}\n'
+        fi
+        ;;
+    'call service delete'*tailscale*)
+        # Emulate procd: deleting the service terminates its instance, which
+        # the fixture pgrep observes through the marker file.
+        mkdir -p "${FAKE_OPENWRT_ROOT:-/nonexistent}" 2>/dev/null
+        [ -n "${FAKE_OPENWRT_ROOT:-}" ] && : > "$FAKE_OPENWRT_ROOT/.stock-daemon-stopped"
+        ;;
+    *) exit 0 ;;
+esac

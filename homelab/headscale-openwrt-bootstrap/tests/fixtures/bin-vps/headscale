@@ -1,0 +1,149 @@
+#!/bin/sh
+# Stateful headscale CLI emulator: version, configtest, users, preauthkeys,
+# nodes (+routes).  State lives under $FAKE_VPS_ROOT/.headscale-state/.
+
+ROOT=${FAKE_VPS_ROOT:-}
+LOG=${FAKE_LOG:-}
+STATE=$ROOT/.headscale-state
+mkdir -p "$STATE" 2>/dev/null
+
+# Simulate "package not installed": without the marker the binary behaves as
+# missing (exit 127), which the scripts map to headscale absent.
+if [ ! -f "$ROOT/.headscale-installed" ] && [ "${FAKE_HEADSCALE_FORCE_PRESENT:-0}" != 1 ]; then
+    printf 'headscale: not installed\n' >&2
+    exit 127
+fi
+
+[ -n "$LOG" ] && printf 'headscale %s\n' "$*" >> "$LOG"
+
+# Pairwise scan: -c FILE, and value flags (--user, --expiration, ...).
+config_arg=
+cmd=
+cmd_sub=
+user_id=
+node_id=
+routes=
+prev=
+for arg in "$@"; do
+    case "$prev" in
+        -c) config_arg=$arg; prev=$arg; continue ;;
+        --user) user_id=$arg; prev=$arg; continue ;;
+        --name) name_filter=$arg; prev=$arg; continue ;;
+        --expiration) prev=$arg; continue ;;
+        --identifier) node_id=$arg; prev=$arg; continue ;;
+        --routes) routes=$arg; prev=$arg; continue ;;
+    esac
+    case "$arg" in
+        -*) : ;;
+        *)
+            if [ -z "$cmd" ]; then
+                cmd=$arg
+            elif [ -z "$cmd_sub" ]; then
+                cmd_sub=$arg
+            fi
+            ;;
+    esac
+    prev=$arg
+done
+
+version_now=$(cat "$STATE/version" 2>/dev/null || printf '0.29.3')
+
+case "$cmd" in
+    version)
+        printf '%s\n' "$version_now"
+        ;;
+    configtest)
+        [ "${FAKE_FAIL_CONFIGTEST:-0}" = 1 ] && { printf 'configtest failed (injected)\n' >&2; exit 1; }
+        if [ -n "$config_arg" ] && grep -q 'BROKEN-YAML' "$config_arg" 2>/dev/null; then
+            printf 'configtest failed: broken fixture yaml\n' >&2
+            exit 1
+        fi
+        # Model the embedded-DERP side effects of validating an enabled
+        # config: the STUN listener comes up with the next service (re)start,
+        # and the DERP private key is materialized by the *invoking* user
+        # (root in production, which is exactly the ownership trap the script
+        # has to repair before restarting the unit).
+        if [ -n "$config_arg" ] && awk '
+            /^derp:/ && !seen { seen = 1; in_derp = 1; next }
+            seen && /^[^ #]/ { in_derp = 0 }
+            in_derp && /^[[:space:]]*enabled:[[:space:]]*true[[:space:]]*(#.*)?$/ { ok = 1; exit }
+            END { exit ok ? 0 : 1 }
+        ' "$config_arg" 2>/dev/null; then
+            : > "$STATE/derp-enabled"
+            mkdir -p "$ROOT/var/lib/headscale" 2>/dev/null
+            [ -f "$ROOT/var/lib/headscale/derp_server_private.key" ] || \
+                : > "$ROOT/var/lib/headscale/derp_server_private.key"
+        else
+            rm -f "$STATE/derp-enabled"
+        fi
+        printf 'Configuration validated successfully.\n'
+        ;;
+    users)
+        case "${cmd_sub:-list}" in
+            list)
+                # Headscale >= 0.26 table: "Name" is the display name (empty
+                # for plain `users create`), the username lives in "Username".
+                # --name filters server-side on the username; releases without
+                # the flag are emulated via FAKE_NO_NAME_FILTER=1.  pterm
+                # colors the table even when captured (observed on a real
+                # 0.29 VPS), so rows carry ANSI sequences the script must
+                # strip; the ID cell reproduces the exact bytes seen there.
+                if [ -n "$name_filter" ] && [ "${FAKE_NO_NAME_FILTER:-0}" = 1 ]; then
+                    printf 'Error: unknown flag: --name\n' >&2
+                    exit 1
+                fi
+                printf '\033[96mID\033[0m | \033[96mName\033[0m | \033[96mUsername\033[0m | \033[96mEmail\033[0m | \033[96mCreated\033[0m\n'
+                if [ -f "$STATE/users" ]; then
+                    awk -F'|' -v f="${name_filter:-}" 'f == "" || $3 == f {
+                        printf "\033[96m\033[0m\033[0m%s\033[90m\033[90m | \033[96m%s\033[0m | \033[96m%s\033[0m | \033[96m%s\033[0m | 2026-01-01\n", $1, $2, $3, $4
+                    }' "$STATE/users"
+                fi
+                ;;
+            create)
+                create_name=$3
+                [ -n "$create_name" ] || { printf 'users create needs a name\n' >&2; exit 1; }
+                if awk -F'|' -v n="$create_name" '$3 == n { found = 1 } END { exit found ? 0 : 1 }' "$STATE/users" 2>/dev/null; then
+                    printf 'Error: creating user: constraint failed: UNIQUE constraint failed: users.name (2067)\n' >&2
+                    exit 1
+                fi
+                next_id=$(awk 'END { print NR + 1 }' "$STATE/users" 2>/dev/null || printf 1)
+                printf '%s||%s|\n' "$next_id" "$create_name" >> "$STATE/users"
+                printf 'User created\n'
+                ;;
+            *) exit 1 ;;
+        esac
+        ;;
+    preauthkeys)
+        case "${cmd_sub:-}" in
+            create)
+                [ -n "$user_id" ] || { printf 'preauthkeys create needs --user\n' >&2; exit 1; }
+                key="hskey-auth-FIXTURE${user_id}-$(date +%s 2>/dev/null || printf 12345)"
+                printf '%s\n' "$key" >> "$STATE/preauthkeys"
+                printf '\033[96m%s\033[0m\n' "$key"
+                ;;
+            list) printf 'ID | Key | Reusable | Expiration | Created | Expires\n' ;;
+            *) exit 1 ;;
+        esac
+        ;;
+    nodes)
+        case "${cmd_sub:-list}" in
+            list)
+                printf 'ID | Hostname | Name | MachineKey | NodeKey | User | Created at | Last seen | Expiry | Conn | Seen\n'
+                printf '1 | kwrt | kwrt | mkey | nkey | home | 2026-01-01 | online | N/A | online | online\n'
+                ;;
+            list-routes)
+                approved=$(cat "$STATE/approved-routes" 2>/dev/null)
+                advertised=$(cat "$STATE/advertised-routes" 2>/dev/null || printf '192.168.10.0/24')
+                printf 'ID | Hostname | Approved | Available (Primary)\n'
+                printf '1 | kwrt | %s | %s (Primary)\n' "${approved:-}" "$advertised"
+                ;;
+            approve-routes)
+                [ -n "$node_id" ] && [ -n "$routes" ] || { printf 'approve-routes needs --identifier and --routes\n' >&2; exit 1; }
+                printf '%s\n' "$routes" > "$STATE/approved-routes"
+                printf 'Route updated\n'
+                ;;
+            *) exit 1 ;;
+        esac
+        ;;
+    *) exit 0 ;;
+esac

@@ -1,0 +1,41 @@
+# Synthetic OpenWrt fw4 fixture: a stock-like router firewall plus the
+# deployed tailscale zone and tailscale->lan forwarding this project manages.
+# No real deployment data lives here.
+
+config defaults
+	option input 'REJECT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+
+config zone
+	option name 'lan'
+	list network 'lan'
+	option input 'ACCEPT'
+	option output 'ACCEPT'
+	option forward 'ACCEPT'
+
+config zone
+	option name 'wan'
+	list network 'wan'
+	list network 'wan6'
+	option input 'REJECT'
+	option output 'ACCEPT'
+	option forward 'DROP'
+	option masq '1'
+	option mtu_fix '1'
+
+config forwarding
+	option src 'lan'
+	option dest 'wan'
+
+config zone 'tailscale'
+	option name 'tailscale'
+	list device 'tailscale0'
+	option input 'ACCEPT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+
+config forwarding 'ts_to_lan'
+	option src 'tailscale'
+	option dest 'lan'
+	option family 'ipv4'

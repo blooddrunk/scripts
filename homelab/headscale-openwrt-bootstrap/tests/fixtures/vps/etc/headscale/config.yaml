@@ -1,0 +1,39 @@
+# Synthetic deployed-Headscale fixture config.  It matches the managed
+# baseline this script renders (loopback listeners, reverse-proxy TLS mode,
+# embedded DERP off, loopback trusted_proxies) and is not from a real host.
+
+server_url: https://hs.example.com
+
+listen_addr: 127.0.0.1:8080
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+
+derp:
+  server:
+    enabled: false
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+  auto_update_enabled: true
+
+disable_check_updates: false
+ephemeral_node_inactivity_timeout: 30m
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+
+tls_cert_path: ""
+tls_key_path: ""
+
+trusted_proxies:
+  - 127.0.0.1/32
+  - ::1/128
