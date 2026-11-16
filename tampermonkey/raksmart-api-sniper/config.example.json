@@ -1,0 +1,30 @@
+{
+  "$comment": "raksmart-api-sniper 配置模板。复制为 config.json 后按需修改；账号密码建议用环境变量 RAKSMART_EMAIL / RAKSMART_PASSWORD 传入，不要写进本文件。所有字段均可省略（使用内置默认值）。",
+
+  "pid": "1889",
+  "sampleId": "psam_01M24N3CFJDQ6AX41HVYFT5GCF",
+  "activityId": "act_01M4TBMTG2VMWJPXXCYX2WZS2S",
+
+  "expectedPrice": 49.9,
+  "billingcycle": "annually",
+
+  "hostname": "",
+  "rootpw": "",
+  "internalNetwork": true,
+
+  "scheduleMode": "once",
+  "saleStart": "2026-11-16T20:00:00+08:00",
+  "saleEnd": "2026-11-16T20:10:00+08:00",
+
+  "dailyWindows": [{ "start": "20:00", "end": "20:10" }],
+  "utcOffsetMinutes": 480,
+
+  "preflightQuoteIntervalMs": 5000,
+  "skipPreflightQuote": false,
+  "orderIntervalMs": 450,
+  "orderTimeoutMs": 15000,
+  "quoteTimeoutMs": 10000,
+  "parallel": 1,
+
+  "clockOffsetMs": null
+}

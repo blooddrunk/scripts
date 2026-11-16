@@ -1,0 +1,931 @@
+// ==UserScript==
+// @name         网页体验自由 (Web UX Freedom)
+// @namespace    https://github.com/jelinenaro/web-ux-freedom
+// @version      1.4.2
+// @description  解除网站前端的体验限制：切屏/失焦检测、强制全屏与退出全屏检测、禁复制/禁右键/禁选中、屏蔽快捷键(F12/Ctrl+C/F5…)、离开页面拦截、鼠标移出弹窗、反反调试、缩放与滚动限制、"禁贴外部内容"诚信粘贴守卫与粘贴行为追踪、PrintScreen"截图后清空剪贴板"式拦截、编辑区外击键与注入字符隐身（键盘行为记录器致盲）。基于对 nowcoder.com 考试前端的分析编写，所有功能可按站点开关（油猴菜单），也可一键将站点加入/移出白名单（本站整体禁用）。
+// @author       jelinenaro
+// @match        *://*/*
+// @run-at       document-start
+// @grant        unsafeWindow
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_registerMenuCommand
+// @grant        GM_unregisterMenuCommand
+// @license      MIT
+// ==/UserScript==
+
+/*
+ * 设计说明（针对 nowcoder.com 的实测结论，见 references/test.html）：
+ *  1. 跳出检测：document 上监听 visibilitychange + window 上监听 blur/focus，
+ *     离开页面 jumpOutTimeLimit 秒记一次，超过 jumpOutCountLimit 次强制收卷。
+ *     → 拦截监听器注册 + document.hidden/visibilityState/hasFocus() 恒定伪装。
+ *  2. 强制全屏：documentElement.requestFullscreen()，监听 4 种前缀的
+ *     fullscreenchange；并有"全屏状态失步修复"循环（判定函数：
+ *     fullscreenElement 存在 && outerWidth/outerHeight ≥ screen-20 &&
+ *     matchMedia('(display-mode: fullscreen)') 不为 true &&
+ *     outerHeight - innerHeight*(outerWidth/innerWidth) ∈ [40,250]）。
+ *     → requestFullscreen 拦截为静默成功 + fullscreenElement 恒返回 documentElement
+ *       + outerWidth/outerHeight 智能伪装（同时满足上述四个探测）。
+ *  3. 禁复制：document 级 copy/cut 监听、selectstart/dragstart 拦截、
+ *     内联 style.user-select:none（如 #richTextContent_444）、kindeditor 禁右键。
+ *     → 高优先级 CSS + 注册拦截 + 捕获期兜底 stopImmediatePropagation。
+ *  4. 反调试：console 禁用 + outer/inner 尺寸差探测开发者工具。
+ *     → console 属性锁定 + 动态构造的 Function/eval 剥离 debugger。
+ *       壳函数 toString 只对自身伪装 native（其余 this 委托原生），否则 core-js
+ *       会把它缓存为"原生 toString"，全页函数源码变 [native code]，nc-ui 弹窗
+ *       .show() 解析 update:visible 回调源码取属性名会失配（v1.4.2 修复：
+ *       诚信协议弹窗无法弹出）。
+ *  5. 剪贴板监视链路（AI 实战题"诚信作答"体系）：
+ *     ① handleExternalCopy：document 级 copy/cut 读 getSelection().toString() 转发 iframe
+ *        → 已被 aggressiveCopy 掐断（监听注册即丢弃）。
+ *     ② 粘贴守卫 M0e/YAe/JAe：挂在答题 textarea（直接绑定）与非 contenteditable
+ *        包裹元素（Vue on:{paste}）上，getData("text/plain") 读粘贴内容，与 5 分钟内
+ *        站内复制台账（去空白子串比对）不匹配则 preventDefault + 弹"请勿粘贴外部内容"
+ *        + 上报指纹（去空白长度+末8字符）。
+ *        → pasteFreedom：注册期丢弃包裹层守卫；事件期对"可见的" input/textarea 把
+ *          getData 伪装为空串 + preventDefault 空操作（守卫以为没粘贴，原生照常插入）。
+ *          Monaco/CodeMirror 的隐藏输入区（尺寸极小）与 contenteditable 编辑器
+ *          （需要读真实剪贴板）自动跳过，代码编辑器粘贴不受影响。
+ *     ③ 顶层 document 捕获级 paste：updateCodePasted + codeBeforePasted 快照
+ *        → 注册期丢弃（仅顶层窗口；iframe 内编辑器如 kindeditor 不受影响）。
+ *  6. PrintScreen 拦截（监考前端通用手法）：
+ *     网页无法阻止 OS 截图本身（preventDefault 对 Win 的截图动作无效），但可以监听
+ *     PrintScreen（key='PrintScreen'/keyCode=44）的 keydown/keyup，事后立刻用
+ *     clipboard.writeText('') 或 隐藏空 textarea + execCommand('copy') 清空剪贴板，
+ *     让 PrintScreen / Alt+PrintScreen 截入剪贴板的图片被抹掉，并弹违规警告 + 上报。
+ *     Win+PrintScreen 直接落盘为文件，网页无法阻止/删除（本功能对它只是让站点"看不见"按键）。
+ *     → 事件期：document-start 抢先在 window/document 捕获期 stopImmediatePropagation，
+ *       站点监听器（含 onkeyup 属性式）根本收不到事件；
+ *       兜底：PrintScreen 后 800ms 窗口内吞掉 Clipboard.write/writeText 与
+ *       execCommand('copy'/'cut')，对付绕过事件系统/先于我们注册的清空逻辑。
+ *  7. 键盘行为记录器（vm 链路，actionKeydown）：window（及各 iframe）上的 keydown
+ *     把组合键/功能键/空格标点连同 TimeDeltaMs 攒进 keyboardDataList（字母数字
+ *     内容被刻意过滤），每 5s 批量 sendVirtualData 上报，与鼠标轨迹/粘贴记录同请求。
+ *     → 按键自由：编辑区外击键 stopImmediatePropagation，记录器收不到事件；
+ *       编辑区（input/textarea/contenteditable，含 Monaco/CodeMirror 隐藏输入区）
+ *       内照常放行，站点绑在输入框上的自身快捷键不受影响。
+ *       例外：VK_PACKET 注入字符（keyCode 231 / 无 code 的单字符 key，SendInput
+ *       程序代打）非物理键盘所能产生，编辑区内也隐身——否则非 ASCII 字符会绕过
+ *       "单字母数字"过滤被明文记入台账；注入文本仍经 input 事件正常插入。
+ *
+ * 诚实声明：本脚本只解除"前端"体验限制，无法也无意影响服务端行为（判题、
+ * 计时、心跳、成绩）。请仅用于练习/模拟等自学场景；正式监考考试请遵守其规则。
+ */
+
+(function () {
+  'use strict';
+
+  /* ================= 0. 环境 ================= */
+
+  const W = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+  const DOC = W.document;
+  const HOST = location.hostname;
+  const IS_TOP = (() => { try { return W.top === W.self; } catch (e) { return false; } })();
+  const VERSION = '1.4.2';
+
+  // ---- 原生引用抢救（在任何覆盖之前） ----
+  const NAT = {};
+  try { NAT.console = {}; ['log', 'info', 'warn', 'error', 'debug', 'dir', 'table', 'trace'].forEach(m => NAT.console[m] = console[m]); } catch (e) {}
+  try {
+    const ET = W.EventTarget && W.EventTarget.prototype;
+    NAT.add = ET && ET.addEventListener;
+    NAT.remove = ET && ET.removeEventListener;
+  } catch (e) {}
+  if (!NAT.add) NAT.add = W.addEventListener && Function.prototype.call.bind(W.addEventListener);
+  NAT.matchMedia = W.matchMedia;
+  NAT.eval = W.eval;
+  NAT.Function = W.Function;
+  NAT.evPreventDefault = W.Event && W.Event.prototype && W.Event.prototype.preventDefault;
+
+  function protoGetter(obj, name) { // 沿原型链找访问器
+    let o = obj;
+    while (o) {
+      const d = Object.getOwnPropertyDescriptor(o, name);
+      if (d && d.get) return d.get;
+      o = Object.getPrototypeOf(o);
+    }
+    return null;
+  }
+  NAT.innerW = protoGetter(W, 'innerWidth');
+  NAT.innerH = protoGetter(W, 'innerHeight');
+  NAT.outerW = protoGetter(W, 'outerWidth');
+  NAT.outerH = protoGetter(W, 'outerHeight');
+  NAT.fsEl = protoGetter(DOC, 'fullscreenElement');
+
+  const dbg = (...a) => { if (eff('debug')) { try { (NAT.console.debug || NAT.console.log)('[WUF]', ...a); } catch (e) {} } };
+
+  /* ================= 1. 配置 ================= */
+
+  const DEFAULTS = {
+    visibility: true,     // 防切屏：页面可见性伪装
+    focus: true,          // 窗口失焦伪装（blur/focus）
+    fullscreen: true,     // 全屏状态伪装（网站认为一直处于全屏）
+    blockFullscreen: true,// 拦截强制全屏调用（静默"成功"但不真的全屏）
+    sizeCloak: true,      // outerWidth/outerHeight 伪装为屏幕尺寸
+    resizeLie: false,     // resize 回调期间 innerWidth/innerHeight 也伪装（更强，可能影响响应式布局）
+    copy: true,           // 恢复复制/剪切
+    contextmenu: true,    // 恢复右键菜单
+    selection: true,      // 恢复文字选中/拖拽
+    hotkey: true,         // 恢复浏览器快捷键（Ctrl+C/F12/F5/Ctrl+F…）
+    unload: true,         // 解除 beforeunload 离开拦截
+    exitIntent: true,     // 阻止"鼠标移出页面就弹窗"
+    antiDebug: true,      // 反反调试（console 恢复、动态 debugger 剥离）
+    zoom: true,           // 解除页面缩放限制（viewport meta）
+    scroll: false,        // 解锁页面滚动（默认关，被弹窗锁死时再开）
+    alerts: true,         // 静音违规类 alert/confirm 弹窗
+    pasteFreedom: false,  // 粘贴自由：解除"禁贴外部内容"诚信守卫与粘贴行为追踪（全局默认关，nowcoder 默认开）
+    screenshot: true,     // 截图自由：阻断"PrintScreen 后清空剪贴板/违规上报"式拦截
+    keyFreedom: false,    // 按键自由：编辑区外击键对站点隐身（防键盘行为记录器；会连带屏蔽站点在编辑区外的正常快捷键，全局默认关）
+    debug: false,         // 调试日志
+  };
+
+  // 站点档案：nowcoder 走激进模式；交互密集型 Web 应用默认关闭会误伤的功能
+  const DOMAIN_RULES = [
+    {
+      match: /(^|\.)nowcoder\.com$/i,
+      vals: { aggressiveCopy: true, pasteFreedom: true, keyFreedom: true }, // 直接阻断 document 级 copy/cut 等；默认开启粘贴自由与按键自由
+    },
+    ...[
+      /(^|\.)(docs|sheets|slides|drive)\.google\.com$/i, /(^|\.)figma\.com$/i,
+      /(^|\.)(notion\.so|notion\.site)$/i, /(^|\.)canva\.com$/i,
+      /(^|\.)(office\.com|office365\.com|sharepoint\.com|live\.com)$/i,
+      /(^|\.)(miro\.com|lucid\.app|processon\.com)$/i,
+      /(^|\.)(diagrams\.net|app\.diagrams\.net|excalidraw\.com)$/i,
+      /(^|\.)wolframalpha\.com$/i, /(^|\.)xmind\.app$/i,
+      /(^|\.)(replit\.com|stackblitz\.com|codesandbox\.io)$/i,
+    ].map(re => ({ match: re, vals: { copy: false, contextmenu: false, selection: false, blockFullscreen: false } })),
+  ];
+
+  let PROFILE = {};
+  for (const r of DOMAIN_RULES) if (r.match.test(HOST)) { PROFILE = r.vals; break; }
+
+  // ---- 存储（优先 GM_*，退化到 localStorage） ----
+  const store = {
+    get(k) {
+      try { if (typeof GM_getValue === 'function') return GM_getValue(k); } catch (e) {}
+      try { const v = W.localStorage.getItem('wuf:' + k); return v == null ? undefined : JSON.parse(v); } catch (e) {}
+      return undefined;
+    },
+    set(k, v) {
+      try { if (typeof GM_setValue === 'function') { GM_setValue(k, v); return; } } catch (e) {}
+      try { W.localStorage.setItem('wuf:' + k, JSON.stringify(v)); } catch (e) {}
+    },
+    del(k) {
+      try { if (typeof GM_deleteValue === 'function') GM_deleteValue(k); } catch (e) {}
+      try { W.localStorage.removeItem('wuf:' + k); } catch (e) {}
+    },
+  };
+  const OVR_KEY = 'ovr:' + HOST;
+  let OVR = store.get(OVR_KEY);
+  if (!OVR || typeof OVR !== 'object') OVR = {};
+
+  function eff(key) {
+    if (key in OVR) return !!OVR[key];
+    if (key in PROFILE) return !!PROFILE[key];
+    return DEFAULTS[key] !== false;
+  }
+
+  // ---- 站点白名单：本站整体禁用（在安装任何 hook 之前判定） ----
+  const OFF_KEY = 'site-off:' + HOST;
+  if (store.get(OFF_KEY) === true) {
+    // 完全不碰页面，只留一个恢复入口
+    if (IS_TOP && typeof GM_registerMenuCommand === 'function') {
+      GM_registerMenuCommand('▶️ 移出白名单 —— 本站启用脚本', () => {
+        store.del(OFF_KEY);
+        location.reload();
+      });
+    }
+    return;
+  }
+
+  /* ================= 2. 统计（window.__WUF__） ================= */
+
+  const STATS = { dropped: {}, intent: {}, stopped: {}, hotkey: {}, suppressed: 0 };
+  const bump = (o, k) => { o[k] = (o[k] || 0) + 1; };
+  try {
+    W.__WUF__ = { version: VERSION, host: HOST, profile: PROFILE, stats: STATS, eff, defaults: DEFAULTS };
+  } catch (e) {}
+
+  /* ================= 3. 事件监听器注册拦截 ================= */
+
+  const VIS_TYPES = ['visibilitychange', 'webkitvisibilitychange', 'mozvisibilitychange', 'msvisibilitychange', 'pagevisibilitychange'];
+  const FS_TYPES = ['fullscreenchange', 'webkitfullscreenchange', 'mozfullscreenchange', 'MSFullscreenChange', 'msfullscreenchange',
+                    'fullscreenerror', 'webkitfullscreenerror', 'mozfullscreenerror', 'MSFullscreenError'];
+  const COPY_FAMILY = ['copy', 'cut', 'contextmenu', 'selectstart', 'dragstart'];
+  const copyKey = t => (t === 'copy' || t === 'cut') ? 'copy' : (t === 'contextmenu' ? 'contextmenu' : 'selection');
+
+  function isWin(t) { return t === W; }
+  function isDocScope(t) { return t === DOC || t === DOC.documentElement || t === DOC.body; }
+
+  // 拦截决策：返回 true=放行原样注册；false=丢弃；函数=换包装后注册
+  function decide(type, target) {
+    const t = String(type);
+
+    if (VIS_TYPES.includes(t) && isDocScope(target) && eff('visibility')) { bump(STATS.dropped, t); dbg('drop', t, '@', target); return false; }
+
+    if (FS_TYPES.includes(t) && (isWin(target) || isDocScope(target)) && eff('fullscreen')) { bump(STATS.dropped, t); return false; }
+
+    if ((t === 'blur' || t === 'focus') && isWin(target) && eff('focus')) { bump(STATS.dropped, 'window.' + t); return false; }
+
+    if (t === 'beforeunload' && (isWin(target) || isDocScope(target)) && eff('unload')) { bump(STATS.dropped, t); return false; }
+
+    if ((t === 'mouseleave' || t === 'mouseenter') && isDocScope(target) && eff('exitIntent')) { bump(STATS.dropped, 'document.' + t); return false; }
+
+    if (COPY_FAMILY.includes(t) && (isWin(target) || isDocScope(target))) {
+      const key = copyKey(t);
+      if (eff(key)) {
+        if (PROFILE.aggressiveCopy) { bump(STATS.dropped, t); bump(STATS.intent, t); return false; }
+        // 观察模式：先放行；一旦该监听器真的 preventDefault 过，之后捕获期直接拦截
+        return function (ev) {
+          const fn = arguments.length && arguments[1]; // 占位，实际在 installHook 里生成
+          void fn;
+        };
+      }
+    }
+
+    // ---- 粘贴自由：掐断守卫的注册（事件级伪装见 8b 节） ----
+    if (eff('pasteFreedom') && t === 'paste') {
+      const docScope = isWin(target) || isDocScope(target);
+      // 链路③：顶层 document/window 捕获级粘贴追踪（codeBeforePasted 快照）。
+      // 仅限顶层窗口——iframe 内（kindeditor 编辑器等）的 document 级 paste 不动。
+      if (docScope && IS_TOP) { bump(STATS.dropped, 'paste@doc'); dbg('drop paste@doc'); return false; }
+      // 链路②：挂在"非 contenteditable、非输入框"包裹元素上的 paste 监听（守卫位置）。
+      // 编辑器自身逻辑在 contenteditable 或其输入区上，不受影响。
+      if (!docScope && target && target.nodeType === 1 &&
+          !target.isContentEditable && target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
+        bump(STATS.dropped, 'paste@wrapper'); dbg('drop paste@wrapper:', target.tagName, target.className); return false;
+      }
+      // input/textarea（守卫直接绑定）与 contenteditable：放行注册，由事件期伪装对付
+    }
+
+    if (t === 'resize' && isWin(target) && eff('resizeLie')) return 'RESIZE_LIE';
+
+    return true;
+  }
+
+  function makeObserver(type, orig) {
+    return function (ev) {
+      const r = orig.apply(this, arguments);
+      try { if (ev && ev.defaultPrevented) { bump(STATS.intent, type); dbg('intent detected:', type); } } catch (e) {}
+      return r;
+    };
+  }
+
+  // resize 回调执行期间，把 innerWidth/innerHeight 伪装成屏幕尺寸（对付
+  // “innerHeight === screen.height 才算全屏”这类窗口尺寸兜底检测）
+  function makeResizeLie(orig) {
+    return function (ev) {
+      if (!eff('resizeLie') || !NAT.innerW || !NAT.innerH) return orig.apply(this, arguments);
+      const sw = W.screen.width, sh = W.screen.height;
+      const fakeW = { get() { return sw; }, configurable: true };
+      const fakeH = { get() { return sh; }, configurable: true };
+      let lied = false;
+      try { Object.defineProperty(W, 'innerWidth', fakeW); Object.defineProperty(W, 'innerHeight', fakeH); lied = true; } catch (e) {}
+      try { return orig.apply(this, arguments); }
+      finally {
+        if (lied) {
+          try { Object.defineProperty(W, 'innerWidth', { get: NAT.innerW, configurable: true }); } catch (e) {}
+          try { Object.defineProperty(W, 'innerHeight', { get: NAT.innerH, configurable: true }); } catch (e) {}
+        }
+      }
+    };
+  }
+
+  function installAddEventListenerHook() {
+    const ET = W.EventTarget && W.EventTarget.prototype;
+    if (!ET || !NAT.add) return false;
+
+    const hooked = function (type, listener, options) {
+      if (listener == null) return NAT.add.call(this, type, listener, options);
+      let action = true;
+      try { action = decide(type, this); } catch (e) { action = true; }
+
+      if (action === false) return undefined;
+      if (action === 'RESIZE_LIE') {
+        const wrapped = makeResizeLie(listener);
+        return NAT.add.call(this, type, wrapped, options);
+      }
+      if (typeof action === 'function' && COPY_FAMILY.includes(String(type))) {
+        const wrapped = makeObserver(String(type), listener);
+        return NAT.add.call(this, type, wrapped, options);
+      }
+      return NAT.add.call(this, type, listener, options);
+    };
+    try {
+      Object.defineProperty(ET, 'addEventListener', { value: hooked, writable: true, configurable: true });
+      if (ET.addEventListener !== hooked) return false;
+      dbg('prototype hook installed');
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // 原型打不上（个别浏览器/管理器）时退化为 window/document 实例级补丁，覆盖 95% 场景
+  function installInstanceFallback() {
+    const hooked = function (type, listener, options) {
+      if (listener == null) return NAT.add.call(this, type, listener, options);
+      let action = true;
+      try { action = decide(type, this); } catch (e) { action = true; }
+      if (action === false) return undefined;
+      if (action === 'RESIZE_LIE') return NAT.add.call(this, type, makeResizeLie(listener), options);
+      if (typeof action === 'function' && COPY_FAMILY.includes(String(type)))
+        return NAT.add.call(this, type, makeObserver(String(type), listener), options);
+      return NAT.add.call(this, type, listener, options);
+    };
+    try { Object.defineProperty(W, 'addEventListener', { value: hooked, configurable: true }); } catch (e) {}
+    try { Object.defineProperty(DOC, 'addEventListener', { value: hooked, configurable: true }); } catch (e) {}
+    dbg('instance fallback installed');
+  }
+
+  if (!installAddEventListenerHook()) installInstanceFallback();
+
+  /* ================= 4. onXxx 属性陷阱 ================= */
+
+  function trapOn(obj, name) {
+    try {
+      Object.defineProperty(obj, name, {
+        configurable: true,
+        get() { return null; },
+        set(v) { if (v) { bump(STATS.dropped, 'on' + name); dbg('trap on' + name); } },
+      });
+    } catch (e) {}
+  }
+  if (eff('visibility')) trapOn(DOC, 'onvisibilitychange');
+  if (eff('fullscreen')) ['onfullscreenchange', 'onwebkitfullscreenchange'].forEach(n => trapOn(DOC, n));
+  if (eff('focus')) ['onblur', 'onfocus'].forEach(n => trapOn(W, n));
+  if (eff('unload')) trapOn(W, 'onbeforeunload');
+  if (eff('exitIntent')) ['onmouseleave', 'onmouseenter'].forEach(n => trapOn(DOC, n));
+  if (eff('copy') || eff('contextmenu') || eff('selection')) {
+    ['oncopy', 'oncut', 'oncontextmenu', 'onselectstart', 'ondragstart'].forEach(n => trapOn(DOC, n));
+  }
+  // body 要等 DOM 就绪
+  NAT.add && NAT.add.call(W, 'DOMContentLoaded', function onReady() {
+    try {
+      if (eff('exitIntent')) ['onmouseleave', 'onmouseenter'].forEach(n => trapOn(DOC.body, n));
+      if (eff('copy') || eff('contextmenu') || eff('selection'))
+        ['oncopy', 'oncut', 'oncontextmenu', 'onselectstart', 'ondragstart'].forEach(n => trapOn(DOC.body, n));
+      if (eff('unload')) trapOn(DOC.body, 'onbeforeunload');
+    } catch (e) {}
+    refreshCSS(); fixViewport();
+  });
+
+  /* ================= 5. 页面状态伪装 ================= */
+
+  function lockGetter(obj, name, fn) {
+    try { Object.defineProperty(obj, name, { get: fn, configurable: false, enumerable: true }); return true; } catch (e) { return false; }
+  }
+
+  if (eff('visibility')) {
+    lockGetter(DOC, 'hidden', () => false);
+    lockGetter(DOC, 'visibilityState', () => 'visible');
+    ['webkitHidden', 'mozHidden', 'msHidden'].forEach(n => lockGetter(DOC, n, () => false));
+    ['webkitVisibilityState', 'mozVisibilityState', 'msVisibilityState'].forEach(n => lockGetter(DOC, n, () => 'visible'));
+    try { Object.defineProperty(DOC, 'hasFocus', { value: () => true, writable: false, configurable: false }); } catch (e) {}
+  }
+
+  if (eff('fullscreen')) {
+    const fakeFsEl = () => {
+      try { const real = NAT.fsEl && NAT.fsEl.call(DOC); if (real) return real; } catch (e) {}
+      return DOC.documentElement || null;
+    };
+    lockGetter(DOC, 'fullscreenElement', fakeFsEl);
+    ['webkitFullscreenElement', 'mozFullScreenElement', 'msFullscreenElement', 'webkitCurrentFullScreenElement'].forEach(n => lockGetter(DOC, n, fakeFsEl));
+    try { Object.defineProperty(DOC, 'fullscreen', { get: () => true, configurable: false }); } catch (e) {}
+    try { Object.defineProperty(W, 'fullScreen', { get: () => true, configurable: true }); } catch (e) {}
+
+    // PWA display-mode 探测
+    if (NAT.matchMedia) {
+      try {
+        Object.defineProperty(W, 'matchMedia', {
+          value: function (q) {
+            const s = String(q);
+            if (/display-mode/.test(s) && /fullscreen/.test(s)) {
+              return { matches: false, media: s, onchange: null,
+                addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {},
+                dispatchEvent() { return false; } };
+            }
+            return NAT.matchMedia.call(W, q);
+          }, writable: true, configurable: true,
+        });
+      } catch (e) {}
+    }
+  }
+
+  /* ================= 6. 窗口尺寸伪装 ================= */
+  // 目标：同时骗过
+  //   ke(): outerHeight < screen.height - 20 || outerWidth < screen.width - 20（窗口化判定）
+  //   pn(): outerHeight - innerHeight*(outerWidth/innerWidth) ∈ [40,250]（"浏览器工具栏高度"，兼做 devtools 探测）
+  //   oi(): outerWidth === screen.width && outerHeight === screen.height（部分全屏判定）
+  if (eff('sizeCloak') && NAT.innerW && NAT.innerH) {
+    const sw = () => (W.screen && W.screen.width) || 1280;
+    const sh = () => (W.screen && W.screen.height) || 800;
+    try {
+      Object.defineProperty(W, 'outerWidth', { get: () => sw(), configurable: true });
+      Object.defineProperty(W, 'outerHeight', {
+        get: () => {
+          const iw = NAT.innerW.call(W), ih = NAT.innerH.call(W), S = sh(), Wd = sw();
+          if (!iw || !ih) return S;
+          // 让 pn() 的"工具栏高度"落在 ~100（40~250 之间），且 outer ≥ screen-20 满足 ke()。
+          // 极端窄高窗口下值会偏大，但探测类检查只看区间，不看绝对值。
+          const t = ih * (Wd / iw);
+          return Math.round(Math.max(S - 19, t + 100));
+        },
+        configurable: true,
+      });
+    } catch (e) {}
+  }
+
+  /* ================= 7. 全屏 API 拦截 ================= */
+
+  (function wrapFullscreenApi() {
+    if (!eff('blockFullscreen') && !eff('fullscreen')) return;
+    const ElP = W.Element && W.Element.prototype;
+    const rqNames = ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen', 'mozRequestFullScreen', 'msRequestFullscreen'];
+
+    const shouldFake = function (el) {
+      if (!eff('blockFullscreen')) return false;
+      // 视频播放器（元素自身或内部含 <video>）的全屏是用户真实需要，放行
+      try {
+        if (el && (el.tagName === 'VIDEO' || (el.querySelector && el.querySelector('video')))) return false;
+      } catch (e) {}
+      return true; // documentElement/body/覆盖层等一律"假成功"
+    };
+
+    if (ElP) rqNames.forEach(name => {
+      const orig = ElP[name];
+      if (typeof orig !== 'function') return;
+      try {
+        Object.defineProperty(ElP, name, {
+          value: function () {
+            if (shouldFake(this)) { dbg('fake requestFullscreen on', this && this.tagName); return W.Promise ? W.Promise.resolve() : undefined; }
+            return orig.apply(this, arguments);
+          }, writable: true, configurable: true,
+        });
+      } catch (e) {}
+    });
+
+    // exitFullscreen：并未真的全屏时直接 resolve，避免站点拿到 TypeError
+    const DocP = W.Document && W.Document.prototype;
+    ['exitFullscreen', 'webkitExitFullscreen', 'mozCancelFullScreen', 'msExitFullscreen'].forEach(name => {
+      const orig = DocP && DocP[name];
+      if (typeof orig !== 'function') return;
+      try {
+        Object.defineProperty(DocP, name, {
+          value: function () {
+            let real = null;
+            try { real = NAT.fsEl && NAT.fsEl.call(this); } catch (e) {}
+            if (!real) return W.Promise ? W.Promise.resolve() : undefined;
+            return orig.apply(this, arguments);
+          }, writable: true, configurable: true,
+        });
+      } catch (e) {}
+    });
+  })();
+
+  /* ================= 8. 捕获期兜底守卫 ================= */
+
+  // copy 家族：window 捕获阶段最先执行，可拦住内联属性 oncopy="return false"、
+  // Vue/jQuery 绑定、以及观察模式下"确认作恶"过的监听器
+  function hasInlineHandler(ev, type) {
+    try {
+      const path = ev.composedPath ? ev.composedPath() : [];
+      for (const n of path) {
+        if (n && typeof n.getAttribute === 'function') {
+          const a = n.getAttribute('on' + type);
+          if (a != null && a !== '') return true;
+        }
+        if (n == null) break;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  COPY_FAMILY.forEach(type => {
+    [W, DOC].forEach(tgt => {
+      if (!NAT.add) return;
+      NAT.add.call(tgt, type, function (ev) {
+        const key = copyKey(type);
+        if (!eff(key)) return;
+        if (!(PROFILE.aggressiveCopy || STATS.intent[type] || hasInlineHandler(ev, type))) return;
+        try { ev.stopImmediatePropagation(); } catch (e) {}
+        bump(STATS.stopped, type);
+        dbg('stopped', type);
+      }, true);
+    });
+  });
+
+  // 快捷键守卫：命中"浏览器默认行为"类组合时，让页面监听器的 preventDefault 变空操作。
+  // 注意不拦 stopPropagation、不动普通按键，站点自己的快捷键（如 Ctrl+Enter 提交）不受影响。
+  const PROTECT_KEYS = new Set(['c', 'x', 'v', 'a', 's', 'p', 'u', 'r', 'f']);
+  function isProtectedKey(e) {
+    const k = String(e.key || '').toLowerCase();
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (k === 'f12' || k === 'f5' || k === 'f3') return true;
+    if (ctrl && !e.altKey && !e.shiftKey && PROTECT_KEYS.has(k)) return true;      // Ctrl/Cmd+C/X/V/A/S/P/U/R/F
+    if (ctrl && e.shiftKey && (k === 'i' || k === 'j' || k === 'c')) return true;  // DevTools
+    if (e.metaKey && e.altKey && (k === 'i' || k === 'j' || k === 'c' || k === 'u')) return true; // macOS Cmd+Opt+…
+    return false;
+  }
+  if (NAT.add) NAT.add.call(W, 'keydown', function (e) {
+    if (!eff('hotkey') || !isProtectedKey(e) || !NAT.evPreventDefault) return;
+    try {
+      let shielded = true;
+      Object.defineProperty(e, 'preventDefault', {
+        configurable: true,
+        value: function () {
+          if (shielded && isProtectedKey(e)) { bump(STATS.hotkey, e.key || '?'); dbg('hotkey shielded:', e.key); return; }
+          return NAT.evPreventDefault.call(e);
+        },
+      });
+      // 页面也可能读 defaultPrevented 做后续逻辑，顺手一起伪装
+      let dp = false;
+      Object.defineProperty(e, 'defaultPrevented', {
+        configurable: true,
+        get() { return dp || false; },
+      });
+      const origDP = e.defaultPrevented;
+      void origDP;
+    } catch (err) {}
+  }, true);
+
+  /* ================= 8b. 粘贴自由：事件期伪装 + 残余弹窗清理 ================= */
+
+  // 粘贴/拖放到"用户可见的" input/textarea 时：把 clipboardData.getData 伪装成恒返回空串、
+  // preventDefault 变空操作。守卫以为什么都没粘 → 不拦截、不弹窗、不上报指纹；
+  // 原生粘贴/拖放不走 getData，照常插入。
+  // 判定"用户可见"以跳过 Monaco/CodeMirror 的隐藏输入区（尺寸极小/移出屏幕），
+  // contenteditable 富文本编辑器需要读真实剪贴板，也不在此处理（其守卫已在注册期丢弃）。
+  function isUserFacingField(el) {
+    try {
+      const r = el.getBoundingClientRect();
+      if (r.width < 30 || r.height < 12 || r.left < -900) return false;
+      const st = W.getComputedStyle(el);
+      return st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0';
+    } catch (e) { return false; }
+  }
+
+  if (NAT.add) ['paste', 'drop'].forEach(type => {
+    NAT.add.call(W, type, function (ev) {
+      if (!eff('pasteFreedom')) return;
+      const tgt = ev.target;
+      if (!tgt || tgt.nodeType !== 1) return;
+      const tag = tgt.tagName;
+      if ((tag !== 'INPUT' && tag !== 'TEXTAREA') || tgt.isContentEditable) return;
+      if (!isUserFacingField(tgt)) return;
+      try {
+        const cd = ev.clipboardData || ev.dataTransfer;
+        if (cd && typeof cd.getData === 'function') cd.getData = function () { return ''; };
+      } catch (e) {}
+      try {
+        Object.defineProperty(ev, 'preventDefault', { configurable: true, value: function () {} });
+      } catch (e) {}
+      bump(STATS.stopped, type + '-shield');
+      dbg(type, 'shielded @', tag);
+    }, true);
+  });
+
+  // 残余的"请勿粘贴外部内容"弹窗自动关闭。element-ui 的 Dialog 用 v-show 切换
+  // display（无 childList 变更），因此用可见性轮询兜底 + childList 观察动态挂载的弹窗。
+  function isNodeVisible(el) {
+    try { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch (e) { return false; }
+  }
+  function closePasteDialog() {
+    const el = DOC.querySelector && DOC.querySelector('.ai-paste-block');
+    if (!el || !isNodeVisible(el)) return;
+    bump(STATS.stopped, 'paste-dialog');
+    const wrap = el.closest && (el.closest('.el-dialog__wrapper') || el.closest('.el-overlay') || el.parentElement);
+    const btn = wrap && (wrap.querySelector('.el-dialog__headerbtn') || wrap.querySelector('[class*="close" i], [class*="Close"]'));
+    if (btn) { try { btn.click(); return; } catch (e) {} }
+    if (wrap) { try { wrap.style.display = 'none'; } catch (e) {} }
+  }
+  function armPasteDialogSweeper() {
+    if (!eff('pasteFreedom') || !DOC.body) return;
+    try {
+      const mo = new W.MutationObserver((muts) => {
+        for (const m of muts) {
+          for (const n of m.addedNodes) {
+            if (!n || n.nodeType !== 1) continue;
+            if ((n.classList && n.classList.contains('ai-paste-block')) ||
+                (n.querySelector && n.querySelector('.ai-paste-block'))) {
+              W.setTimeout(closePasteDialog, 50);
+              return;
+            }
+          }
+        }
+      });
+      mo.observe(DOC.body, { childList: true, subtree: true });
+    } catch (e) {}
+    W.setInterval(() => { if (eff('pasteFreedom')) closePasteDialog(); }, 300);
+  }
+  if (DOC.body) armPasteDialogSweeper();
+  else NAT.add.call(W, 'DOMContentLoaded', armPasteDialogSweeper);
+
+  /* ================= 8c. 截图自由：阻断 PrintScreen 拦截 ================= */
+
+  // 站点无法阻止 OS 截图，但会在 PrintScreen(keyCode=44) 的 keydown/keyup 里清空剪贴板
+  // （抹掉截图）+ 弹违规警告 + 上报。两层防御：
+  //   ① 我们在 document-start 抢先注册 window/document 捕获期监听，对 PrintScreen
+  //     事件 stopImmediatePropagation —— 后注册的站点监听器（含 onkeyup 属性式）收不到事件；
+  //   ② 兜底：PrintScreen 后 800ms 内吞掉 Clipboard.write/writeText 与 execCommand('copy'/'cut')，
+  //     对付先于我们注册/绕过事件系统（定时器轮询）的清空逻辑。
+  // 注意不 preventDefault：浏览器默认行为拦不住 OS 截图，动了反而可能引入差异。
+  const PS_WINDOW_MS = 800;
+  let lastPSAt = 0;
+  const inPSWindow = () => eff('screenshot') && (Date.now() - lastPSAt) < PS_WINDOW_MS;
+
+  function isPrintScreen(e) {
+    if (!e) return false;
+    const k = String(e.key == null ? '' : e.key);
+    if (k === 'PrintScreen') return true;
+    if (e.code === 'PrintScreen') return true;
+    // keyCode/which 44 = VK_SNAPSHOT；排除个别浏览器把逗号也报成 44 的怪癖（此时 key 是单字符）
+    return (e.keyCode === 44 || e.which === 44) && k.length !== 1;
+  }
+
+  if (NAT.add) ['keydown', 'keyup'].forEach(type => {
+    [W, DOC].forEach(tgt => {
+      NAT.add.call(tgt, type, function (ev) {
+        if (!eff('screenshot') || !isPrintScreen(ev)) return;
+        lastPSAt = Date.now();
+        try { ev.stopImmediatePropagation(); ev.stopPropagation(); } catch (e) {}
+        bump(STATS.stopped, 'printscreen');
+        dbg('printscreen event blocked:', type);
+      }, true);
+    });
+  });
+
+  (function guardClipboardWipe() {
+    try {
+      const CP = W.Clipboard && W.Clipboard.prototype;
+      if (!CP) return;
+      ['writeText', 'write'].forEach(name => {
+        const orig = CP[name];
+        if (typeof orig !== 'function') return;
+        Object.defineProperty(CP, name, {
+          value: function () {
+            if (inPSWindow()) { bump(STATS.stopped, 'clipboard-wipe'); dbg('clipboard write swallowed:', name); return W.Promise.resolve(undefined); }
+            return orig.apply(this, arguments);
+          },
+          writable: true, configurable: true,
+        });
+      });
+    } catch (e) {}
+    try {
+      const DP = W.Document && W.Document.prototype;
+      const origExec = DP && DP.execCommand;
+      if (typeof origExec !== 'function') return;
+      Object.defineProperty(DP, 'execCommand', {
+        value: function (cmd) {
+          if (inPSWindow() && (cmd === 'copy' || cmd === 'cut')) { bump(STATS.stopped, 'clipboard-wipe'); dbg('execCommand swallowed:', cmd); return true; }
+          return origExec.apply(this, arguments);
+        },
+        writable: true, configurable: true,
+      });
+    } catch (e) {}
+  })();
+
+  /* ================= 8d. 按键自由：编辑区外击键对站点隐身 ================= */
+
+  // 牛客 vm 行为记录链路：window（及各 iframe）上的 keydown 把组合键/功能键连同击键
+  // 间隔攒进 keyboardDataList，每 5s 批量上报（字母数字内容被刻意过滤，但组合键、
+  // 功能键、空格/标点与节奏全量上报）。与"截图自由"同模式：对"目标不是输入框/
+  // 可编辑区"的键盘事件 stopImmediatePropagation——记录器与编辑区外的快捷键拦截器
+  // 统统收不到。编辑区内的击键照常放行：打字、IME、站点绑定在输入框上的自身快捷键
+  // （如 Ctrl+Enter 提交、Monaco/CodeMirror 的按键映射）都不受影响。
+  // 注意：会连带屏蔽站点在编辑区外监听的正常快捷键（如视频站空格暂停），全局默认关。
+  // 例外：VK_PACKET 注入字符（SendInput 程序代打，keyCode 231 / code 为空的单字符
+  // key）不可能来自物理键盘——物理键总有 code，IME 走 229/"Process"。这类 keydown
+  // 在编辑区内也一并隐身：注入文本仍经 beforeinput/input 正常插入（工具功能不受
+  // 影响，我们只 stopPropagation 不 preventDefault），但记录器看不到——否则像"图"
+  // 这样的非 ASCII 字符会绕过"单字母数字"过滤被明文写进台账。
+  function isTypingEventTarget(ev) {
+    try {
+      const path = ev.composedPath ? ev.composedPath() : [];
+      const el = path.length ? path[0] : ev.target;
+      if (!el || el.nodeType !== 1) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true;
+    } catch (e) { return false; }
+  }
+
+  function isInjectedKeyEvent(ev) {
+    try {
+      if (ev.keyCode === 231) return true;
+      return ev.code === '' && String(ev.key == null ? '' : ev.key).length === 1;
+    } catch (e) { return false; }
+  }
+
+  if (NAT.add) ['keydown', 'keyup', 'keypress'].forEach(type => {
+    [W, DOC].forEach(tgt => {
+      NAT.add.call(tgt, type, function (ev) {
+        if (!eff('keyFreedom')) return;
+        const injected = isInjectedKeyEvent(ev);
+        if (!injected && isTypingEventTarget(ev)) return; // 编辑区内放行——注入字符除外
+        try { ev.stopImmediatePropagation(); ev.stopPropagation(); } catch (e) {}
+        bump(STATS.stopped, injected ? 'keystroke-injected' : 'keystroke');
+        dbg('keystroke cloaked:', type, ev.key, injected ? '(injected)' : '');
+      }, true);
+    });
+  });
+
+  /* ================= 9. 反反调试 ================= */
+
+  (function antiAntiDebug() {
+    if (!eff('antiDebug')) return;
+
+    // 9.1 锁定 console：页面禁用 console.log / 刷 console.clear 都失效
+    try {
+      for (const m of ['log', 'info', 'warn', 'error', 'debug', 'dir', 'table', 'trace']) {
+        const native = NAT.console[m];
+        if (!native) continue;
+        Object.defineProperty(W.console, m, {
+          configurable: true,
+          get() { return native; },
+          set() { bump(STATS.dropped, 'console.' + m); },
+        });
+      }
+      Object.defineProperty(W.console, 'clear', { configurable: true, get() { return function () {}; }, set() {} });
+    } catch (e) {}
+
+    // 9.2 剥离动态构造的 debugger（new Function('debugger') / Function('debugger') / eval('debugger')）
+    //     注：打包进 bundle 的静态 debugger 语句无法从 JS 层移除，请用 DevTools 的
+    //     "Never pause here" 或停用断点按钮应对。
+    //     ⚠️ 壳函数的 toString 只能对"自身"伪装成 native：页面里 core-js（trtc 等 SDK 自带）
+    //     初始化时会执行 uncurryThis(Function.toString) 把它当"原生实现"缓存，之后
+    //     Function.prototype.toString 的补丁对所有普通函数兜底走它。若它无脑返回固定假串，
+    //     全页函数的 toString() 都会变成 "[native code]"——nowcoder nc-ui 的弹窗 .show()
+    //     靠正则解析 update:visible 回调源码提取属性名，会因此失配（v1.4.1 实测导致
+    //     「阅读并签署诚信协议与隐私声明」弹窗无法弹出）。所以：this===壳自身才伪装，
+    //     其余 this 一律委托原生 toString。
+    try {
+      const nativeFnToString = Function.prototype.toString;
+      const strip = s => (/\bdebugger\b/.test(s) ? String(s).replace(/\bdebugger\b/g, 'void 0') : s);
+      const NativeFunction = NAT.Function;
+      const Fn = function Function() {
+        const a = Array.prototype.slice.call(arguments);
+        a[a.length - 1] = strip(a[a.length - 1]);
+        return NativeFunction.apply(this, a);
+      };
+      try { Fn.prototype = NativeFunction.prototype; } catch (e) {}
+      const fakeNative = (name) => 'function ' + name + '() { [native code] }';
+      const delegatingToString = function toString() {
+        const self = this;
+        if (self === Fn) return fakeNative('Function');
+        if (self === W.eval) return fakeNative('eval');
+        return nativeFnToString.call(self);
+      };
+      try { Object.defineProperty(Fn, 'toString', { value: delegatingToString, writable: true, configurable: true }); } catch (e) {}
+      W.Function = Fn;
+      try { NativeFunction.prototype.constructor = Fn; } catch (e) {}
+      W.eval = function (src) { return NAT.eval.call(W, strip(src)); };
+      try { Object.defineProperty(W.eval, 'toString', { value: delegatingToString, writable: true, configurable: true }); } catch (e) {}
+    } catch (e) {}
+  })();
+
+  /* ================= 10. CSS：选中/复制/滚动 ================= */
+
+  const CSS_ID = 'wuf-style';
+  function ensureStyle() {
+    let el = null;
+    try { el = DOC.getElementById(CSS_ID); } catch (e) {}
+    if (!el) {
+      el = DOC.createElement('style');
+      el.id = CSS_ID;
+      (DOC.head || DOC.documentElement).appendChild(el);
+    }
+    return el;
+  }
+  function refreshCSS() {
+    if (!DOC.createElement) return;
+    let css = '';
+    if (eff('copy') || eff('selection')) {
+      // 三重 :not(#id) 拉满特异性，压过站点带 !important 的 user-select:none；
+      // user-select 可继承，shadow DOM 内容也会跟随宿主元素恢复
+      css += '*, *::before, *::after { -webkit-user-select: text !important; -moz-user-select: text !important; user-select: text !important; -webkit-touch-callout: default !important; }'
+           + '::selection { background-color: #338fff !important; color: #fff !important; }';
+    }
+    if (eff('scroll')) {
+      css += 'html, body { overflow: auto !important; overscroll-behavior: auto !important; }';
+    }
+    try { ensureStyle().textContent = css; } catch (e) {}
+  }
+  if (DOC.documentElement) refreshCSS();
+  else NAT.add.call(W, 'readystatechange', () => { if (DOC.documentElement) refreshCSS(); });
+
+  /* ================= 11. viewport 缩放限制 ================= */
+
+  function fixViewport() {
+    if (!eff('zoom') || !DOC.querySelectorAll) return;
+    try {
+      DOC.querySelectorAll('meta[name="viewport" i], meta[name="Viewport" i]').forEach(m => {
+        let c = m.getAttribute('content') || '';
+        if (!c) return;
+        let changed = false;
+        c = c.replace(/(user-scalable)\s*=\s*no/i, () => { changed = true; return 'user-scalable=yes'; });
+        c = c.replace(/(maximum-scale)\s*=\s*[\d.]+/i, () => { changed = true; return 'maximum-scale=10'; });
+        c = c.replace(/(minimum-scale)\s*=\s*[\d.]+/i, () => { changed = true; return 'minimum-scale=0.1'; });
+        if (changed) { try { m.setAttribute('content', c); dbg('viewport fixed:', c); } catch (e) {} }
+      });
+    } catch (e) {}
+  }
+  fixViewport();
+  try {
+    let mo = null;
+    const stop = () => { if (mo) mo.disconnect(); };
+    mo = new W.MutationObserver(() => fixViewport());
+    mo.observe(DOC.documentElement, { childList: true, subtree: true });
+    NAT.add.call(W, 'load', stop);
+  } catch (e) {}
+
+  /* ================= 12. 违规弹窗静音 ================= */
+
+  (function wrapDialogs() {
+    if (!eff('alerts')) return;
+    const VIOLATION = /切屏|跳出|切换|离开|退出|全屏|监考|监控|检测|作弊|违规|违纪|复制|禁止|警告|考试|交卷|防作弊|snapshot|proctor|violat/i;
+    ['alert', 'confirm', 'prompt'].forEach(fnName => {
+      const orig = W[fnName];
+      if (typeof orig !== 'function') return;
+      try {
+        W[fnName] = function (msg) {
+          const text = String(msg == null ? '' : msg);
+          if (!VIOLATION.test(text)) return orig.apply(W, arguments);
+          STATS.suppressed++;
+          dbg('suppressed ' + fnName + ':', text.slice(0, 60));
+          if (fnName === 'confirm') return false;   // 违规类确认框默认选"取消"，避免误触强制交卷等流程
+          if (fnName === 'prompt') return null;
+          return undefined;
+        };
+      } catch (e) {}
+    });
+  })();
+
+  /* ================= 13. 油猴菜单 ================= */
+
+  function toast(msg) {
+    if (!IS_TOP || !DOC.createElement) return;
+    try {
+      const d = DOC.createElement('div');
+      d.textContent = msg;
+      d.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:rgba(20,20,28,.92);color:#fff;padding:10px 14px;border-radius:8px;font:13px/1.5 system-ui,sans-serif;max-width:340px;box-shadow:0 4px 16px rgba(0,0,0,.3);transition:opacity .3s';
+      (DOC.body || DOC.documentElement).appendChild(d);
+      W.setTimeout(() => { d.style.opacity = '0'; }, 2200);
+      W.setTimeout(() => { try { d.remove(); } catch (e) {} }, 2600);
+    } catch (e) {}
+  }
+
+  const FEATURES = [
+    { k: 'visibility',      n: '防切屏（页面可见性伪装）' },
+    { k: 'focus',           n: '窗口失焦伪装' },
+    { k: 'fullscreen',      n: '全屏状态伪装' },
+    { k: 'blockFullscreen', n: '拦截强制全屏' },
+    { k: 'sizeCloak',       n: '窗口尺寸伪装(outer)' },
+    { k: 'resizeLie',       n: 'resize尺寸伪装(强力)' },
+    { k: 'copy',            n: '恢复复制/剪切' },
+    { k: 'contextmenu',     n: '恢复右键菜单' },
+    { k: 'selection',       n: '恢复文字选中/拖拽' },
+    { k: 'pasteFreedom',    n: '粘贴自由（解除诚信粘贴守卫/追踪）' },
+    { k: 'screenshot',      n: '截图自由（防PrintScreen清剪贴板/上报）' },
+    { k: 'keyFreedom',      n: '按键自由（编辑区外击键对站点隐身）' },
+    { k: 'hotkey',          n: '恢复浏览器快捷键' },
+    { k: 'unload',          n: '解除离开页面拦截' },
+    { k: 'exitIntent',      n: '阻止鼠标移出弹窗' },
+    { k: 'antiDebug',       n: '反反调试' },
+    { k: 'zoom',            n: '解除页面缩放限制' },
+    { k: 'scroll',          n: '解锁页面滚动' },
+    { k: 'alerts',          n: '静音违规警告弹窗' },
+    { k: 'debug',           n: '调试日志' },
+  ];
+
+  const menuIds = [];
+  function refreshMenu() {
+    if (typeof GM_unregisterMenuCommand === 'function') { menuIds.forEach(id => { try { GM_unregisterMenuCommand(id); } catch (e) {} }); }
+    menuIds.length = 0;
+    if (typeof GM_registerMenuCommand !== 'function') return;
+    menuIds.push(GM_registerMenuCommand('🚫 加入白名单 —— 本站禁用脚本', () => {
+      store.set(OFF_KEY, true);
+      toast('已加入白名单，即将刷新生效…');
+      W.setTimeout(() => { try { location.reload(); } catch (e) {} }, 600);
+    }));
+    FEATURES.forEach(f => {
+      const on = eff(f.k);
+      const label = (on ? '✅ ' : '⬜ ') + f.n + (on ? '：开' : '：关');
+      menuIds.push(GM_registerMenuCommand(label, () => {
+        OVR[f.k] = !on;
+        store.set(OVR_KEY, OVR);
+        refreshCSS();
+        toast(`【${f.n}】已${OVR[f.k] ? '开启' : '关闭'}（已注册的拦截需刷新页面后完全生效）`);
+        refreshMenu();
+      }));
+    });
+    menuIds.push(GM_registerMenuCommand('🔄 重置本站设置（恢复默认）', () => {
+      OVR = {};
+      store.del(OVR_KEY);
+      refreshCSS();
+      toast('已恢复默认设置，刷新页面后完全生效');
+      refreshMenu();
+    }));
+  }
+  if (IS_TOP) refreshMenu();
+
+  dbg('initialized on', HOST, 'profile=', PROFILE);
+})();

@@ -1,0 +1,3 @@
+# 运行状态（防重复下单记录），不应提交
+.raksmart-sniper-state.json
+config.json

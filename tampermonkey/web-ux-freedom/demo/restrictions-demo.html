@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>前端限制复刻 Demo（模拟 nowcoder 考试页）</title>
+<style>
+  body { font: 14px/1.7 system-ui, sans-serif; margin: 24px; color: #222; }
+  .panel { border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; margin: 12px 0; }
+  .noselect-css { user-select: none; -webkit-user-select: none; background: #f6f8fa; padding: 8px; }
+  #board { position: fixed; top: 12px; right: 12px; background: rgba(0,0,0,.8); color: #0f0;
+           padding: 10px 14px; border-radius: 8px; font: 12px/1.6 monospace; white-space: pre; z-index: 99999; }
+  button { padding: 6px 14px; }
+  .viol { color: #d00; font-weight: bold; }
+</style>
+</head>
+<body oncontextmenu="window.__demo.inlineCtx++; return false;">
+
+<h2>前端限制复刻 Demo</h2>
+<p>本页面复刻 nowcoder 考试前端的限制手法（visibilitychange / blur 上报、强制全屏、
+copy/cut/selectstart 拦截、右键禁用、快捷键屏蔽、退出意图、console 禁用、违规 alert），
+用于验证 web-ux-freedom.user.js 的效果。右上角为触发计数板。</p>
+
+<div class="panel">
+  <b>1. 切屏/失焦监控</b>（切到别的标签页或点击其他窗口试试）<br>
+  <span id="visMsg">正常作答中…</span>
+</div>
+
+<div class="panel">
+  <b>2. 强制全屏</b>
+  <button id="fsBtn">开始考试（进入全屏）</button>
+  <span id="fsMsg"></span>
+</div>
+
+<div class="panel noselect-css">
+  <b>3. 禁止复制的内容（CSS user-select:none + copy/cut 拦截）</b>
+  <p id="richText" style="user-select: none; -webkit-user-select: none;">
+    这是一段禁止选中的题目内容。Ship it yesterday: the quick brown fox jumps over the lazy dog.
+  </p>
+  <div id="attrTest" oncopy="window.__demo.inlineCopy++; return false;" oncontextmenu="window.__demo.inlineCtx++; return false;">
+    这一段还带内联 oncopy / oncontextmenu 拦截属性。
+  </div>
+</div>
+
+<div class="panel">
+  <b>4. 快捷键屏蔽</b>：本页拦截 Ctrl+C / Ctrl+U / F12 / F5 / Ctrl+F（试试看）
+</div>
+
+<div class="panel">
+  <b>5. 反调试</b>：本页会禁用 console.log 并刷 console.clear。
+  <button id="dbgBtn">动态 new Function('debugger') 自检（开控制台时卡死）</button>
+</div>
+
+<div id="exitPopup" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:99998;">
+  <div style="background:#fff; max-width:420px; margin:15% auto; padding:24px; border-radius:8px; text-align:center;">
+    <div class="viol">⚠ 检测到您离开页面！</div>
+    <p>（退出意图弹窗：document mouseleave 触发）</p>
+    <button onclick="document.getElementById('exitPopup').style.display='none'">关闭</button>
+  </div>
+</div>
+
+<div class="panel">
+  <b>6. 诚信粘贴守卫（复刻 AI 实战题 M0e/actionPaste/链路3）</b><br>
+  <div id="editorWrap" style="border:1px dashed #bbb; padding:8px;">
+    <textarea id="answer" rows="3" style="width:92%;" placeholder="往这里粘贴外部文本试试（守卫直接挂在 textarea 上，包裹层还有一个）"></textarea>
+    <div id="richWrap" style="margin-top:8px;">
+      <div id="richEditor" contenteditable="true" style="min-height:2em; border:1px solid #ccc; padding:4px;">富文本区（contenteditable，slate 式自处理粘贴）</div>
+    </div>
+  </div>
+  <!-- Monaco 式隐藏输入区：粘贴监听必须始终能读到真实剪贴板（回归保护用） -->
+  <textarea id="hiddenInput" style="position:absolute; left:-9999px; width:12px; height:18px; opacity:0;" tabindex="-1" aria-hidden="true"></textarea>
+</div>
+
+<div id="pasteDlgWrap" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:99997;">
+  <div class="el-dialog" style="background:#fff; max-width:380px; margin:20% auto; padding:24px; position:relative; border-radius:8px;">
+    <button class="el-dialog__headerbtn" id="dlgClose" style="position:absolute; top:8px; right:10px; border:0; background:none; cursor:pointer; font-size:16px;">×close</button>
+    <div class="ai-paste-block" style="color:#d00; font-weight:bold;">⚠ 请勿粘贴外部内容，诚信作答</div>
+  </div>
+</div>
+
+<div class="panel">
+  <b>8. PrintScreen 拦截</b>：按下 PrintScreen / Alt+PrintScreen 后，本页立即清空剪贴板
+  （抹掉截图）并弹违规警告。<button id="simPsBtn">模拟 PrintScreen 按键</button>
+</div>
+
+<div class="panel">
+  <b>9. 键盘行为记录器</b>：window 级 keydown 监听，把击键（含组合键）攒进台账、
+  周期批量上报（复刻牛客 vm 链路 keyboardDataList；牛客真实实现会过滤单个字母数字，
+  本 demo 为上限复刻：全记）。在下方输入框内外分别按组合键试试区别；VK_PACKET
+  注入字符（keyCode 231，程序代打）也在隐身范围。
+  <input id="recInput" style="margin-left:8px;" placeholder="编辑区内击键会放行">
+</div>
+
+<div id="psPopup" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:99996;">
+  <div style="background:#fff; max-width:420px; margin:15% auto; padding:24px; border-radius:8px; text-align:center;">
+    <div class="viol">⚠ 检测到截图行为，已记录违规！</div>
+    <p>（剪贴板已被清空，截图作废）</p>
+    <button onclick="document.getElementById('psPopup').style.display='none'">关闭</button>
+  </div>
+</div>
+
+<div id="board">初始化中…</div>
+
+<script>
+// ===== 模拟 nowcoder cts/testV3 的监控逻辑 =====
+window.__demo = {
+  visEvents: 0, hiddenSeen: 0, blurEvents: 0, focusEvents: 0,
+  copyBlocked: 0, inlineCopy: 0, inlineCtx: 0, ctxBlocked: 0, selBlocked: 0,
+  keyBlocked: 0, exitIntent: 0, unloadArmed: false, consoleDisabled: false,
+  fsRequested: 0, fsRealChange: 0, fsWarnShown: 0, dbgLoopOn: false,
+  noopRef: null, // 指向本页用来"禁用 console.log"的空函数
+};
+const D = window.__demo;
+
+function render() {
+  document.getElementById('board').textContent =
+    'visibilitychange: ' + D.visEvents + ' (hidden:' + D.hiddenSeen + ')\n' +
+    'window blur/focus: ' + D.blurEvents + '/' + D.focusEvents + '\n' +
+    'copy/cut blocked: ' + D.copyBlocked + ' (inline:' + D.inlineCopy + ')\n' +
+    'contextmenu: ' + D.ctxBlocked + ' (inline:' + D.inlineCtx + ')\n' +
+    'selectstart: ' + D.selBlocked + '\n' +
+    'keydown blocked: ' + D.keyBlocked + '\n' +
+    'printScreen seen/wipe: ' + D.psSeen + '/' + D.psWipeCalls + '\n' +
+    'keyLog entries/flushes: ' + D.keyLog.length + '/' + D.keyFlushes + '\n' +
+    'exitIntent: ' + D.exitIntent + '\n' +
+    'fsReq/fsChange/warn: ' + D.fsRequested + '/' + D.fsRealChange + '/' + D.fsWarnShown + '\n' +
+    'consoleDisabled: ' + D.consoleDisabled;
+}
+setInterval(render, 300);
+
+// --- 1. 切屏检测（与 nowcoder 相同：document visibilitychange + window blur/focus）---
+document.addEventListener('visibilitychange', function () {
+  D.visEvents++;
+  if (document.visibilityState === 'hidden') {
+    D.hiddenSeen++;
+    document.getElementById('visMsg').innerHTML = '<span class="viol">⚠ 检测到切屏！已记录跳出（累计 ' + D.hiddenSeen + ' 次）</span>';
+    window.alert('检测到切屏行为，本轮练习已被标记！');
+  }
+});
+window.addEventListener('blur', function () { D.blurEvents++; });
+window.addEventListener('focus', function () { D.focusEvents++; });
+window.onblur = function () { D.blurEvents += 1000; }; // 属性式绑定（另一路径）
+
+// --- 2. 强制全屏（documentElement.requestFullscreen + 全屏监听 + 尺寸探测）---
+var FS_EVENTS = ['fullscreenchange', 'webkitfullscreenchange', 'mozfullscreenchange', 'MSFullscreenChange'];
+FS_EVENTS.forEach(function (t) { document.addEventListener(t, function () { D.fsRealChange++; checkFs(); }); });
+
+function ke() { return window.outerHeight < window.screen.height - 20 || window.outerWidth < window.screen.width - 20; }
+function Ge() { return document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement || null; }
+function toolbarH() { return window.outerHeight - window.innerHeight * (window.outerWidth / window.innerWidth); }
+
+function checkFs() {
+  var real = Ge();
+  if (!real || ke() || toolbarH() < 40 || toolbarH() > 250) {
+    D.fsWarnShown++;
+    document.getElementById('fsMsg').innerHTML = '<span class="viol">⚠ 未处于全屏！（fullscreenElement=' + !!real + ', 窗口化=' + ke() + ', 工具栏=' + Math.round(toolbarH()) + '）</span>';
+  } else {
+    document.getElementById('fsMsg').textContent = '✔ 全屏正常';
+  }
+}
+document.getElementById('fsBtn').addEventListener('click', function () {
+  D.fsRequested++;
+  var el = document.documentElement;
+  var rq = el.requestFullscreen || el.webkitRequestFullscreen;
+  var p = rq && rq.call(el);
+  if (p && p.then) p.then(checkFs, checkFs); else setTimeout(checkFs, 50);
+});
+
+// --- 3. 禁复制/选中（document 级 copy/cut/selectstart/dragstart + 内联属性）---
+document.addEventListener('copy', function (e) { D.copyBlocked++; e.preventDefault(); });
+document.addEventListener('cut', function (e) { D.copyBlocked++; e.preventDefault(); });
+document.addEventListener('selectstart', function (e) { D.selBlocked++; e.preventDefault(); });
+document.addEventListener('dragstart', function (e) { D.selBlocked++; e.preventDefault(); });
+document.addEventListener('contextmenu', function (e) { D.ctxBlocked++; e.preventDefault(); });
+
+// --- 4. 快捷键屏蔽 ---
+document.addEventListener('keydown', function (e) {
+  var k = (e.key || '').toLowerCase();
+  if (k === 'f12' || k === 'f5' || k === 'f3' ||
+      ((e.ctrlKey || e.metaKey) && ['c', 'u', 'f', 's'].indexOf(k) !== -1) ||
+      ((e.ctrlKey || e.metaKey) && e.shiftKey && ['i', 'j', 'c'].indexOf(k) !== -1)) {
+    D.keyBlocked++;
+    e.preventDefault();
+  }
+});
+
+// --- 5. 退出意图 + beforeunload ---
+document.addEventListener('mouseleave', function () { D.exitIntent++; document.getElementById('exitPopup').style.display = 'block'; });
+window.addEventListener('beforeunload', function (e) { D.unloadArmed = true; e.preventDefault(); e.returnValue = '确定离开考试？'; });
+
+// --- 6. 反反调试：禁用 console ---
+D.noopRef = function () {};
+console.log = D.noopRef; // 被脚本锁定后此赋值无效
+console.info = D.noopRef;
+console.clear();
+setInterval(function () { try { console.clear(); } catch (e) {} }, 2000);
+setTimeout(function () {
+  D.consoleDisabled = (console.log === D.noopRef);
+  render();
+}, 100);
+
+document.getElementById('dbgBtn').addEventListener('click', function () {
+  D.dbgLoopOn = true;
+  setInterval(new Function('debugger'), 300); // 动态构造的 debugger 循环
+});
+
+// --- 7. 诚信粘贴守卫（复刻 nowcoder AI 实战题，链路②/③）---
+D.pasteGuardRead = null; D.pasteBlocked = 0; D.lastFingerprint = null;
+D.wrapperGuardFired = 0; D.richWrapperGuardFired = 0; D.richInsert = null;
+D.codePastedTracked = false; D.monacoRead = null; D.dropBlocked = 0; D.dropRead = null;
+
+function showPasteDialog() { document.getElementById('pasteDlgWrap').style.display = ''; }
+document.getElementById('dlgClose').addEventListener('click', function () {
+  document.getElementById('pasteDlgWrap').style.display = 'none';
+});
+
+// M0e 复刻：读粘贴文本，"外部"（台账恒空 → 一律外部）则 preventDefault + 弹窗 + 指纹
+function m0e(e) {
+  var p = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+  D.pasteGuardRead = p;
+  if (!p) return false;
+  e.preventDefault();
+  D.pasteBlocked++;
+  D.lastFingerprint = p.replace(/\s+/g, '').length + ':' + p.replace(/\s+/g, '').slice(-8);
+  showPasteDialog();
+  return true;
+}
+// zu 型：守卫直接绑在答题 textarea 上
+document.getElementById('answer').addEventListener('paste', m0e);
+// actionPaste 型：守卫挂在非 contenteditable 包裹层（Vue on:{paste} 落点）
+document.getElementById('editorWrap').addEventListener('paste', function () { D.wrapperGuardFired++; });
+// slate 型：contenteditable 自己处理粘贴（必须能读到真实剪贴板）+ 包裹层守卫
+document.getElementById('richEditor').addEventListener('paste', function (e) {
+  var t = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+  e.preventDefault();
+  D.richInsert = t;
+  this.textContent = t || this.textContent;
+});
+document.getElementById('richWrap').addEventListener('paste', function (e) {
+  D.richWrapperGuardFired++;
+  e.preventDefault();
+  showPasteDialog();
+});
+// 链路③：顶层 document 捕获级粘贴追踪（updateCodePasted + codeBeforePasted 快照）
+document.addEventListener('paste', function () { D.codePastedTracked = true; }, true);
+// Monaco 式回归保护：隐藏输入区的粘贴监听，必须读到真实内容
+document.getElementById('hiddenInput').addEventListener('paste', function (e) {
+  e.preventDefault();
+  D.monacoRead = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+});
+// JAe 型：拖放守卫（读 dataTransfer）
+document.getElementById('answer').addEventListener('drop', function (e) {
+  var dt = e.dataTransfer || e.clipboardData;
+  var p = (dt && dt.getData('text/plain')) || '';
+  D.dropRead = p;
+  if (p) { e.preventDefault(); D.dropBlocked++; showPasteDialog(); }
+});
+
+// --- 8. PrintScreen 拦截复刻（监考前端通用手法：清空剪贴板 + 违规警告）---
+D.psSeen = 0; D.psWipeCalls = 0; D.psWarnShown = 0;
+D.wipeViaExec = 0; D.wipeViaApi = 0;
+
+function psWipe(reason) {
+  D.psWipeCalls++;
+  if (reason === 'exec') D.wipeViaExec++; else D.wipeViaApi++;
+  // 手法A：隐藏空 textarea + execCommand('copy') 覆盖剪贴板（无需权限）
+  var ta = document.createElement('textarea');
+  ta.value = '';
+  ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try { document.execCommand('copy'); } catch (e) {}
+  document.body.removeChild(ta);
+  // 手法B：Clipboard API 再补一刀
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText('').catch(function () {});
+  }
+}
+function onPsKey(e) {
+  if (!((e.key === 'PrintScreen') || e.keyCode === 44)) return;
+  D.psSeen++;
+  psWipe('exec');
+  D.psWarnShown++;
+  document.getElementById('psPopup').style.display = 'block';
+}
+window.addEventListener('keyup', onPsKey, true);   // 捕获期抢先（站点常用位置）
+document.addEventListener('keydown', onPsKey);     // 冒泡期 document 级
+document.body.onkeyup = onPsKey;                   // 属性式绑定（第三条路径）
+
+// 手动演示/自动化用：派发合成 PrintScreen 事件（真实按键无法在无头环境产生）
+function simPS() {
+  ['keydown', 'keyup'].forEach(function (type) {
+    var e = new KeyboardEvent(type, { key: 'PrintScreen', bubbles: true, cancelable: true });
+    try { Object.defineProperty(e, 'keyCode', { value: 44 }); Object.defineProperty(e, 'which', { value: 44 }); } catch (err) {}
+    document.body.dispatchEvent(e);
+  });
+}
+document.getElementById('simPsBtn').addEventListener('click', simPS);
+
+// --- 9. 键盘行为记录器复刻（牛客 vm 链路 actionKeydown → keyboardDataList → 5s 批量上报）---
+D.keyLog = [];
+D.keyFlushes = 0;
+window.addEventListener('keydown', function (e) {
+  var combo = (e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + (e.shiftKey ? 'Shift+' : '') + (e.key || '?');
+  D.keyLog.push(combo);
+});
+setInterval(function () { if (D.keyLog.length) D.keyFlushes++; }, 5000); // 模拟批量上报节奏
+
+render();
+</script>
+</body>
+</html>
