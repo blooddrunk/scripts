@@ -1,0 +1,693 @@
+# openwrt-dns-daed
+
+**OpenWrt 防 DNS 劫持一键部署脚本** —— `dnsmasq` + `https-dns-proxy` + `daed`
+
+适用于企业网关/运营商存在 **DNS 劫持、错误解析、明文 DNS 干扰** 的网络环境。本脚本把一套经过实机验证的加固配置（原为手工排查 checklist）自动化为一条命令，并支持更新、只读体检、备份、回退与清理。
+
+```text
+███████╗ OpenWrt 24.10+ · busybox ash · 无交互提问 · 幂等可重跑 · 变更前自动备份
+```
+
+---
+
+## 目录
+
+- [背景与架构](#背景与架构)
+- [环境要求](#环境要求)
+- [快速开始](#快速开始)
+- [首次部署流程](#首次部署流程)
+- [命令参考](#命令参考)
+- [配置文件详解](#配置文件详解)
+- [daed 的手动步骤（GUI）](#daed-的手动步骤gui)
+- [脚本到底改了什么](#脚本到底改了什么)
+- [验证](#验证)
+- [更新 / 回退 / 清理](#更新--回退--清理)
+- [常见问题](#常见问题)
+- [已知限制](#已知限制)
+- [安全注意事项](#安全注意事项)
+- [项目结构与开发](#项目结构与开发)
+
+---
+
+## 背景与架构
+
+在企业网络中自建代理节点（VPS + 3x-ui 等）时，节点域名可能被公司网关/运营商劫持或解析到错误 IP，导致节点频繁失联。本方案建立**两条彼此独立、职责清晰**的 DNS 链路：
+
+### 链路 A —— LAN / 路由器常规 DNS
+
+```text
+LAN 客户端
+   ↓ TCP/UDP 53（硬编码 DNS 被 force_dns 拉回路由器）
+dnsmasq :53（no-resolv，忽略 WAN 下发的公司 DNS）
+   ↓ 唯一上游 127.0.0.1:5053
+https-dns-proxy
+   ↓ HTTPS/443 加密
+AliDNS DoH
+
+LAN 客户端 TCP/UDP 853（DoT）
+   ↓
+REJECT（阻止绕过路由器 DNS）
+```
+
+### 链路 B —— daed 自身用于域名分流的 DNS
+
+```text
+中国域名 geosite:cn → AliDNS DoH
+其他域名          → Google Public DNS DoH
+默认 ipversion_prefer: 4 → 有 A/AAAA 时仅响应 A，AAAA 返回空答案
+```
+
+**关键点**：`https-dns-proxy` 只负责链路 A；daed 自己的 DNS upstream 不会因此自动加密，必须单独改为 DoH，否则国外域名仍会被明文 53 端口的干扰影响。默认的 `ipversion_prefer: 4` 只影响 daed 处理的 DNS，不会改变链路 A 中 `https-dns-proxy` 返回的记录。
+
+详细原理（为什么 `must_direct`、为什么节点要按 endpoint 精确放行等）见 [docs/principles.md](docs/principles.md)。
+
+---
+
+## 环境要求
+
+| 组件 | 要求 | 说明 |
+|---|---|---|
+| OpenWrt | 24.10+（fw4/nftables） | 24.10/25.x 均可；iptables 旧版本为尽力兼容 |
+| Shell | busybox ash / dash | 纯 POSIX sh，无 bash 依赖 |
+| `https-dns-proxy` | 必需 | 缺失时脚本会拒绝执行（可用 `--install-missing` 从官方源自动安装） |
+| `daed` | 可选 | [kenzok8/openwrt-daede](https://github.com/kenzok8/openwrt-daede)；缺失时仅生成配置片段供后续粘贴 |
+| 下载工具 | curl / wget / uclient-fetch 任一 | 仅在线安装与自更新时需要 |
+
+---
+
+## 快速开始
+
+**方式一：管道执行（不落地文件）**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/blooddrunk/openwrt-dns-daed/main/openwrt-dns-daed.sh | sh -s -- install
+```
+
+**方式二：先下载再执行（推荐，便于重跑与排障）**
+
+```sh
+wget -O /tmp/odd.sh https://raw.githubusercontent.com/blooddrunk/openwrt-dns-daed/main/openwrt-dns-daed.sh
+sh /tmp/odd.sh install
+```
+
+脚本全程**无交互提问**（对管道执行安全），执行逻辑：
+
+1. 环境与依赖检测（`https-dns-proxy` / `daed` 是否存在）
+2. 自动备份当前 UCI / 防火墙 / daed 状态到 `/root/openwrt-dns-daed/backups/`
+3. 清理并加固 dnsmasq（`no-resolv`、清掉失效的 5054/5055、关闭重复劫持）
+4. 配置 https-dns-proxy（AliDNS DoH、force DNS 53/853、单实例）
+5. 重启服务并逐层验证
+6. 生成 daed DNS / Routing 配置片段、全局/节点检测设置清单，并对 `wing.db` 做**只读**信号检查
+7. 输出报告与后续手动步骤提示
+
+---
+
+## 首次部署流程
+
+```text
+1. 在路由器上运行 install（首次会自动生成 /etc/openwrt-dns-daed.conf 模板）
+2. 编辑 /etc/openwrt-dns-daed.conf —— 填入你的真实节点 endpoint、内网域名等
+3. （推荐）放置 /etc/openwrt-dns-daed.d/routing-extra.dae 附加规则（模板见 examples/）
+4. 再次运行 install —— 用你的配置重新生成 daed 片段与 GUI 设置清单
+5. 打开 daed GUI：创建分组（proxy/premium/doh…）→ 设置全局/节点检测
+   → 粘贴 DNS / Routing 片段
+6. /etc/init.d/daed restart 重启（勿只用 UI 内的停止/启动），运行 check 复查
+```
+
+配置文件**一旦生成永不被覆盖**，升级脚本也不影响你的自定义内容。完整重放手册（含分组速查表、check_tolerance 建议与无 GUI 直改库附录）见 [docs/reapply-runbook.md](docs/reapply-runbook.md)。
+
+---
+
+## 命令参考
+
+```text
+openwrt-dns-daed.sh [全局选项] <命令> [命令选项]
+```
+
+| 命令 | 说明 |
+|---|---|
+| `install` | 一键部署/修复（幂等，可重复运行；变更前自动备份） |
+| `check` | **只读**体检，逐项输出 PASS/FAIL/WARN 报告，不修改任何配置 |
+| `update` | 自更新脚本到最新版并重新应用配置（需配置 `SCRIPT_SELFUPDATE_URL`） |
+| `backup` | 手动备份当前 UCI / 防火墙 / daed 状态 |
+| `rollback` | 回退到最近一次（或 `--to` 指定）备份 |
+| `clean` | 清理脚本产物（默认保留备份与配置文件；`--purge` 全部删除） |
+| `version` / `help` | 版本 / 帮助 |
+
+| 选项 | 适用命令 | 说明 |
+|---|---|---|
+| `--config <路径>` | 全局 | 指定配置文件（默认 `/etc/openwrt-dns-daed.conf`） |
+| `--install-missing` | install | 自动安装缺失的 https-dns-proxy（官方源）与 daed（kenzok8 官方脚本） |
+| `--no-net-test` | install/check | 跳过 nslookup 连通性测试 |
+| `--restart-daed` | install | 部署完成后顺带重启 daed 服务（默认只提示手动重启） |
+| `--to <备份目录>` | rollback | 指定回退到哪个备份 |
+| `--with-daed` | rollback | 同时恢复 daed 数据库 `wing.db`（会覆盖备份之后的全部 daed 改动，慎用） |
+| `--purge` | clean | 连同备份、配置文件、追加片段目录一起删除 |
+
+示例：
+
+```sh
+sh /root/openwrt-dns-daed/openwrt-dns-daed.sh check
+sh /root/openwrt-dns-daed/openwrt-dns-daed.sh rollback --with-daed
+sh /tmp/odd.sh install --install-missing --restart-daed
+```
+
+---
+
+## 配置文件详解
+
+配置文件位于 `/etc/openwrt-dns-daed.conf`（可用 `--config` 改路径），模板见仓库中的 [openwrt-dns-daed.conf.example](openwrt-dns-daed.conf.example)。
+
+### LAN / https-dns-proxy
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `LAN_IFACES` | `lan` | force_dns 生效的接口，多个用空格分隔 |
+| `HDP_RESOLVER_URL` | `https://223.5.5.5/dns-query` | dnsmasq 上游 DoH 解析器。默认 IP 形式：无需解析 DoH 域名，避免依赖 dnsmasq/hdp/daed 链路（见下方「DoH 上游为什么用 IP」） |
+| `HDP_BOOTSTRAP_DNS` | `223.5.5.5,223.6.6.6` | 引导 DNS，仅在 `HDP_RESOLVER_URL` 为域名形式时用于解析 DoH 域名本身 |
+| `HDP_LISTEN_ADDR` | `127.0.0.1` | https-dns-proxy 监听地址 |
+| `HDP_LISTEN_PORT` | `5053` | https-dns-proxy 监听端口 |
+
+### daed DNS / Routing
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `DAED_DNS_CN_URL` | `https://223.5.5.5/dns-query` | 中国域名（geosite:cn）使用的 DoH（IP 形式） |
+| `DAED_DNS_FALLBACK_URL` | `https://1.1.1.1/dns-query` | 其余域名使用的 DoH（IP 形式；需配合 Routing 中 `dip(...) -> <DoH 专用组>` 钉住规则从节点出口，直连国内会被干扰，且钉住组要跨 VPS） |
+| `DAED_DNS_IPVERSION_PREFER` | `4` | daed DNS 遇到同时存在 A/AAAA 的域名时仅响应 A；留空则省略该设置并允许 IPv6 |
+| `DAED_DNS_SELF_DOMAINS` | `example.top` | 自建域名后缀（节点入口/Headscale 等，空格分隔）：生成 `qname(suffix: …) -> alidns` 直连解析行，避免 fallback DoH 承载组全灭时连坐节点域名解析；留空不生成 |
+| `DAED_GROUP_PROXY` | `proxy` | 普通代理组名，**必须与 daed 中实际组名一致** |
+| `DAED_GROUP_PREMIUM` | `premium` | 高级代理组名，同上 |
+| `NODE_ENDPOINTS` | 占位符 | **重点配置**。格式 `IP:协议:端口`，空格分隔；支持 IPv6（如 `2001:db8::1:tcp:443`）。只放行节点入口端口，不要对整台 VPS `/32` must_direct |
+| `DIRECT_INTERNAL_DOMAINS` | 占位符 | 内部/私有域名（公司内网域名等）直连；`geosite:private` 自动追加 |
+| `PREMIUM_GEOSITES` | `anthropic paypal` | 固定走 premium 组的 geosite（不含前缀）；留空则不生成该规则 |
+| `PROXY_CN_DOMAINS` | 小红书/NGA/雪球等 | 需强制走代理组的国内域名（在 geosite:cn 直连之前生效） |
+
+### DoH 上游为什么用 IP 形式（v1.2.2 起默认）
+
+域名形式的 DoH 上游（`https://dns.alidns.com/...`）在连接前要先解析 DoH 域名本身，而这条解析链路恰好是最脆弱的一环，并会形成**循环依赖**：
+
+```text
+daed 域名形式 DoH ──要解析──▶ dnsmasq ──▶ https-dns-proxy 的 DoH ──经 daed 转发──▶ 出网
+        ▲                                                          │
+        └───────────── daed 转发面卡死时整环皆死 ────────────────────┘
+```
+
+实测（2026-08 网关策略丢包事件）：节点拨号风暴把 daed 用户态转发卡死后，域名形式上游与 https-dns-proxy 一起失效，表现为「国内网站也打不开」；把上游改为 `https://223.5.5.5/dns-query` 后 daed 用自带 mark 的 socket 直接拨号、不再依赖解析链路，故障期间国内 DNS 保持可用。AliDNS 与 Cloudflare 的证书均包含对应 IP 的 SAN，`https://223.5.5.5/dns-query` / `https://1.1.1.1/dns-query` 合法可用。
+
+代价与注意：失去上游域名多 IP 容灾（对 223.5.5.5/1.1.1.1 这类 anycast 可忽略）；`1.1.1.1:443` 直连国内会被干扰，**必须**保留 Routing 中 `dip(1.1.1.1/32, 1.0.0.1/32, ...) -> <DoH 专用组>` 钉住规则，且该组要**跨 VPS + 协议多样**（见「fallback DoH 上游钉到 doh 专用组」）。
+
+### 其他
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `DISABLE_IPV6` | `0` | 可选整机禁用 IPv6（见下节）。适合上游拿不到 PD / IPv6 实际不通的网络 |
+| `TEST_DOMAIN` | `example.com` | check 连通性测试域名 |
+| `MAX_BACKUPS` | `8` | 备份保留份数，超出自动轮转删除 |
+| `DAED_EXTRA_DIR` | `/etc/openwrt-dns-daed.d` | 追加片段目录（见下） |
+| `SCRIPT_SELFUPDATE_URL` | 内置官方仓库地址 | `update` 在线自更新的脚本地址；fork 后请覆盖，显式置空则禁用在线更新 |
+| `DAED_INSTALLER_URL` | kenzok8 官方脚本 | `--install-missing` 安装 daed 时使用 |
+
+### daed 全局 / 节点检测（手动 GUI 清单）
+
+以下变量只用于生成 `daed-global-settings.txt`，脚本不会直接写入 daed 的 `wing.db`：
+
+| 变量 | 默认值 | GUI 中的推荐值/作用 |
+|---|---|---|
+| `DAED_BOOTSTRAP_RESOLVER` | 空 | 引导解析器留空，使用 dae 默认值；如显式填写请使用 IPv4 `host:port`（可选加固见「节点去 DNS 依赖」） |
+| `DAED_FALLBACK_RESOLVER` | `8.8.8.8:53` | 备用解析器；当前值已是 IPv4，仅在系统 DNS 不可用时使用 |
+| `DAED_TCP_CHECK_URL` | `http://cp.cloudflare.com` | 节点 TCP 检测链接 |
+| `DAED_TCP_CHECK_IPV4` | `1.1.1.1` | 节点 TCP 检测 IPv4 地址 |
+| `DAED_UDP_CHECK_DNS` | `223.5.5.5:53` | 节点 UDP 检测 DNS；IPv4-only 配置，不填写 IPv6 地址 |
+
+在当前 IPv4-only 配置下，TCP/UDP 节点检测都不要保留 IPv6 检测地址。若以后需要使用 IPv6，应同时恢复 IPv6 检测并重新评估节点的 IPv6 线路质量。
+
+### 整机禁用 IPv6（DISABLE_IPV6，可选）
+
+**适用场景**：上游拿不到 IPv6 PD 前缀（例如上级是光猫/路由器 NAT、企业内网），或 WAN 上虽有全球 IPv6 地址但实际不通的宽带。
+
+**为什么建议关掉**：WAN 上存在「有名无实」的全球 IPv6 地址时，daed 解析 DoH 上游（如 cloudflare-dns.com）会拿到 AAAA 并优先用 v6 拨号，而 v6 实际不通会导致：
+
+1. 国外域名 DNS 间歇性 SERVFAIL（国内 alidns 正常，表现为「国内能上、外网全挂」）；
+2. DNS 瘫痪连累节点域名（如 `*.haoqi90.top`）解析失败，daed 将节点标记不可用，代理整体下线（v4 也一样超时）；
+3. LAN 客户端从 RA 拿到 ULA 后不断尝试 IPv6 连接，产生大量 `handleConn: failed to dial [v6]:443` 日志。
+
+重启 daed 只是复位 DNS 连接与节点状态，**不是必然恢复，更不是根治**；彻底移除这个「假 IPv6」才是。
+
+**开启方法**：在 `/etc/openwrt-dns-daed.conf` 中设置后重跑 `install`：
+
+```sh
+DISABLE_IPV6="1"
+```
+
+`install` 将执行（幂等，仅在值有变化时才 `reload network`）：
+
+- `network.wan.ipv6='0'`（v4 WAN 接口不再获取 IPv6）
+- `network.wan6.proto='none'`（独立 v6 WAN 接口停用）
+- 删除 `network.globals.ula_prefix`（br-lan 不再持有 ULA/RDNSS）
+- `dhcp.lan`（及 `LAN_IFACES` 内全部接口）的 `ra` / `dhcpv6` / `ndp` = `disabled`
+- **主动清理 LAN/WAN 设备上残留的 ULA/动态 IPv6 地址**：实测仅 reload network 并不总是移除已分配的地址（br-lan 上会长期残留 deprecated ULA），而客户端会把这个 v6 地址继续当 DNS 服务器使用，等于 IPv6 只关了一半（v1.2.0 起）
+- 备份自本版本起包含 `network` 配置，`rollback` 可整体还原
+
+**注意**：
+
+- 客户端已缓存的 ULA/RA 最长约 30 分钟自然老化，重连 Wi-Fi/网线可立即清除；
+- 备份与 `check` 均已覆盖 IPv6 状态；`DISABLE_IPV6=0` 时 `check` 会显示一条 SKIP 提示，不产生 FAIL；
+- Tailscale 等自带 v6 隧道的接口不受影响（脚本只操作标准 `wan`/`wan6` 与 `LAN_IFACES`）。
+
+### 节点去 DNS 依赖（可选加固）
+
+daed 的节点来自订阅时，server 通常是域名（如 `bwh.example.top`），每次拨号前都要先解析；DNS 链路瘫痪时节点会连坐失联（日志特征：`bootstrap resolver returned no usable address`、`Marking dialer as unavailable`）。两项可选加固，按需启用：
+
+**1. 显式指定 daed 引导解析器（最简单，推荐先做）**
+
+daed 面板 → 配置 → 全局 → 「引导解析器」填 IPv4 的 `223.5.5.5:53`。这样节点域名与 DoH 上游域名的解析不再依赖系统 resolv.conf 链路，而是直连 AliDNS 明文 53（国内毫秒级、与 DoH 链路和节点完全独立）。对应配置变量 `DAED_BOOTSTRAP_RESOLVER`（脚本只生成 GUI 清单，不写 `wing.db`，需手动填写一次）。
+
+**2. Sub-Store 订阅改写：节点 server 域名 → IP（彻底零解析依赖）**
+
+自建 Sub-Store 的，在对应订阅下添加一个「脚本」类型的节点操作：
+
+```js
+// 将节点 server 从域名改写为 IP；SNI/serverName 保持域名不变，握手不受影响
+const ipMap = {
+  'bwh.example.top': '203.0.113.10',
+  'nosla.example.top': '198.51.100.20',
+  // 按需补充其余节点
+};
+function operator(proxies) {
+  for (const p of proxies) {
+    if (ipMap[p.server]) p.server = ipMap[p.server];
+  }
+  return proxies;
+}
+```
+
+注意：
+
+- Reality 的 `serverName`/SNI 是独立字段，改写 server 后**保持域名不动**，否则握手失败；
+- VPS 换 IP 时需同步修改 `ipMap` 与本脚本的 `NODE_ENDPOINTS`（两者本来就要求一致，不增加维护面）。
+
+只做第 1 项即可消除绝大部分连坐风险；第 2 项适合追求「DNS 全挂也不影响节点拨号」的场景。
+
+**3. DNS 分流：自建域名直连解析（轻量，2026-11-02 实战固化）**
+
+在 daed DNS 中加一条 `qname(suffix: <自建域名后缀>) -> alidns`（脚本变量 `DAED_DNS_SELF_DOMAINS`，重跑 `install` 会自动进生成的 DNS 片段）。节点/Headscale 域名（如 `*.haoqi90.top`）不在 `geosite:cn`，会走 fallback DoH——而 fallback DoH 恰恰钉在 doh 承载组上：该组全灭时**节点域名解析也跟着死**（实测日志里 `hs-nosla.haoqi90.top` 的 DoH 转发失败），形成「节点解析依赖代理、代理恢复依赖节点」的死锁。自建域名不涉污染，直连 alidns 解析即可解开。
+
+### fallback DoH 上游钉到 doh 专用组（可选加固）
+
+**背景**：daed 自身对 fallback DoH 上游（如 cloudflare-dns.com）的查询也会被 dae 按 Routing 分流，通常命中 `fallback: proxy` 从节点出口发出——这也是国外域名 DNS 答案不被污染的原因。代价是 fallback DNS 的可用性 = 所选节点的可用性：当分组策略（如 `min_moving_avg`）选中 Hysteria2 节点、而其 UDP/QUIC 隧道受 QoS 抖动时，DoH 会跟着间歇失败（日志特征：`DNS forward to upstream failed dialer=xx-hysteria2 ... connect error: http3: ...`，该 `http3` 报错来自 Hysteria2 隧道层而非 DoH3）。
+
+**做法**：在 `fallback: proxy` 之前，把发往 DoH 上游的流量指向一个**专用 DoH 承载组**（下例命名为 `doh`；成员要求见下方「前提与取舍」）。支持 IP 与域名两种匹配写法，推荐**双写互为补充**：
+
+```text
+# dip 打底：fallback DoH 默认上游 1.1.1.1/1.0.0.1（IP 形式直连无需解析），
+# 以及 cloudflare-dns.com 的固定 A 记录（覆盖域名形式上游与 SNI-less 流量）
+dip(1.1.1.1/32, 1.0.0.1/32, 104.16.248.249/32, 104.16.249.249/32) -> doh
+# domain 覆盖 A 记录漂移与其它带该 SNI 的流量（如浏览器自带 DoH）
+domain(suffix: cloudflare-dns.com) -> doh
+```
+
+两种写法的取舍：
+
+| | `dip()` | `domain()` |
+|---|---|---|
+| 命中确定性 | 确定，不依赖任何机制 | 依赖 SNI 嗅探对 daed 自身流量生效（`dial_mode: ip` 时嗅探整体关闭，domain 规则将失效） |
+| 抗 A 记录变化 | 差（IP 写死，可 `nslookup cloudflare-dns.com 223.5.5.5` 复核） | 好 |
+| 覆盖面 | 仅列出的 IP | 所有带该 SNI 的流量 |
+| 无 SNI 的流量（如直连 `https://1.1.1.1` 的 DoH） | 能命中（默认示例已含 `1.1.1.1/32, 1.0.0.1/32`） | 匹配不到 |
+
+背景知识：dae 的 `domain()` 域名来源有两个——daed 处理过的 DNS 应答（IP→域名回溯）与 SNI 嗅探。对「daed 自身的 DoH 上游」这条流量，前者不适用（`cloudflare-dns.com` 由 daed 内部引导解析、未经客户端查询，不进 IP→域名缓存），只能依赖后者；这就是推荐 `dip` 打底、`domain` 补充的原因。
+
+前提与取舍（2026-10-30 引入跨 VPS 硬要求；2026-11-02 再修订：协议多样性同为硬要求）：
+
+1. **钉住组必须跨 VPS（硬要求）**。DoH 钉住组的可用性 = 全部国外域名解析的可用性：组内节点若同属一台 VPS（哪怕同时有 Reality + Hysteria2 两种入口，共享同一入口 IP），VPS 抖动时整组全灭——日志特征 `Group has no dialer alive group=xxx` → `no proper dialer for DNS upstream` → 所有国外域名 SERVFAIL，而 `proxy` 等其他分组可能一切正常，表现为「分组里明明有可用节点，外网却全挂」。
+2. **钉住组必须协议多样（2026-11-02 起硬要求，原「建议纯 Reality/TCP」作废）**。跨 VPS 只防「单 VPS 故障」，防不了**协议级/端口级封锁**：2026-11-02 实战中三台不同 VPS 的 Reality 端口同时被墙（TCP 直连超时、VPS 本身存活、同 VPS 的 Hysteria2 正常），`reality` 过滤的跨 VPS doh 组照样整组全灭、全部国外域名 SERVFAIL 长时间持续。修法即把过滤正则改为 `hysteria2|reality`。Reality/TCP 仍是 DoH 小包交互的**优选**承载（看重稳定而非吞吐：Hysteria2 的 UDP QoS 抖动会传导给 DoH，`http3:` 报错即来自 hy2 隧道层，且低延迟的 hy2 常被 `min` 系策略选中变成常态承载），但**不能是唯一**——reality 被封时 hy2 自动接管，恢复后若延迟更低自动回归。
+3. **Hysteria2 的真正用武之地是大流量承载分组**（如 `proxy`）：丢包高/被限速的线路上吞吐通常优于 TCP 系代理，也避免了 TCP-in-TCP 恶化。按角色分工即可，不必全组追求纯 Reality。
+4. 只有一台 "premium" 线路 VPS 时：`premium` 组保留该 VPS 全部节点（hy2 + reality 协议多样性反而是优点），继续服务**按出口质量选路**的规则（anthropic/paypal 等）；另建跨 VPS 的 `doh` 组承载上面两条 DoH 规则。规则只影响发往 DoH 专用地址/带该 SNI 的流量，不影响其他 Cloudflare 服务。
+
+**关于「严格优先 premium、全挂才 fallback、恢复自动回归」**：dae 核心支持 `filter: name(节点) [add_latency: -500ms]` 延迟偏移（官方定位就是 latency-based failover——给 premium 节点负偏移，健康时永远最低必被选中，劣化/死亡自动让位，恢复自动回归）。但截至 2026-10 实测，daed 面板与 wing.db 均不支持该字段（分组策略枚举仅 `fixed/min/min_avg10/min_moving_avg/random`）。daed 下的两个折中：
+
+- 合并 premium 与备用 Reality 节点为一个组，`min` 策略 + `check_tolerance`（如 50ms）粘性：premium 线路健康时通常延迟最低被选中，劣化自动切换；但平延迟时无保证，且恢复后需比现任节点快出 tolerance 才回归——对 IP 敏感服务意味着偶发换出口，需自行权衡；
+- 维持 premium 独占（本仓库默认）：严格保证出口，代价是单 VPS 故障期间这些服务不可用。
+
+两种落地方式：
+
+1. **脚本原生（推荐）**：写入 `DAED_EXTRA_DIR`（默认 `/etc/openwrt-dns-daed.d/`）下的 `routing-extra.dae`（会自动插入到节点 endpoint 规则之后、不会被后续规则遮蔽），重跑 `install` 后把重新生成的 `daed-routing.dae` 整体粘贴到 daed GUI；
+2. **手动**：直接在 daed GUI 的 Routing 中该位置添加此行，保存并重启 daed。
+
+**验证**：触发若干次国外域名解析后观察日志，不再出现 `-hysteria2` 的上游失败、且 DoH 上游连接的 `dialer=` 已变为 Reality 节点即为生效：
+
+```sh
+grep "DNS forward to upstream failed" /var/log/daed/daed.log | tail
+```
+
+若只加了 `domain` 规则而上游仍走原组，说明该版本对 daed 自身流量的嗅探不生效——保留 `dip` 那条即可（确定性命中）。
+
+### 追加自定义 Routing 规则
+
+在 `DAED_EXTRA_DIR`（默认 `/etc/openwrt-dns-daed.d/`）下放置：
+
+- `routing-extra.dae` —— 插入到「节点 endpoint 规则」之后（适合额外的 `must_direct`）
+- `dns-extra.dae` —— 追加到 DNS 片段末尾
+
+文件内容为原始 dae 配置行，例如：
+
+```text
+# routing-extra.dae
+dip(203.0.113.99/32) && l4proto(tcp) && dport(8443) -> must_direct
+```
+
+一份现成的脱敏模板（含 fallback DoH 钉到 `doh` 组、Hysteria2 回程 `sip`、STUN、headscale 锁出口、Cloudflare Tunnel 等实战附加规则）见 [examples/routing-extra.dae.example](examples/routing-extra.dae.example)。把整套方案重放到新路由器的完整步骤见 [docs/reapply-runbook.md](docs/reapply-runbook.md)。
+
+### 自建 Headscale 场景：控制面/DERP 域名按出口位置定向（2026-10-27 实战）
+
+路由器同时是自建 headscale tailnet 的节点时，`tailscaled` 的控制面
+（`https://<login-server>/`）与 DERP 中继（`:443`）流量默认命中
+`fallback: proxy`，**走哪个节点完全由分组的延迟策略决定**。实测问题：
+分组自动选中的节点出口在圣何塞（SJC），导致——
+
+- DERP Tokyo 中继绕行 CN→SJC→TYO，经中继的流量 ~680ms（本应 ~100ms）；
+- 控制面请求 ~1.4s（SJC→FRA 绕行）。
+
+**修法**：为两个控制域名各建一个**锁定出口的分组**，让流量"出口就在目标 VPS 本机"：
+
+1. daed GUI → 配置 → 分组：新建分组 `tailscale-ctrl`（对应 VPS 的订阅 +
+   `hysteria2` 过滤）、`tailscale-derp`（同理，出口在 DERP VPS 本机）。
+
+   **必须加 `hysteria2` 过滤（2026-11-02 实战教训）**：若按整订阅（hy2+reality）
+   建组，当 reality 节点处于「间歇被墙→急救探测复活」的翻动状态时，dae 的
+   `min` 系策略会被复活瞬间 **`min=0s` 的未测延迟**吸引切过去，控制面长轮询
+   （`PollNetMap: …/machine/map: context canceled`）随即超时——tailnet 节点
+   在控制面视角反复 offline/online，**子网路由被撤回**，经 tailnet 的管理通道
+   随之断续瘫痪。控制面/DERP 是长连接、看稳定性，只放 hysteria2 即可。
+2. `routing-extra.dae` 加两条（放在 CN 规则之前的插入点已由脚本保证）：
+
+```text
+domain(suffix: "hs-nosla.haoqi90.top") -> tailscale-ctrl
+domain(suffix: "hs-bitsflow.haoqi90.top") -> tailscale-derp
+```
+
+（第二条域名按实际 DERP 域名替换；多 tailnet 各加一套。）
+
+3. 重新生成/粘贴 Routing 并重启 daed。
+
+**验证**：
+
+```sh
+curl -sk -o /dev/null -w '%{http_code} %{time_total}s\n' https://hs-nosla.haoqi90.top/health   # 200, ~0.4s(出口本地)
+tailscale netcheck    # tokyo/nosla 延迟应明显下降(经本机出口节点)
+```
+
+> 注意 daed 的数据面是 **eBPF**：`nft list tables` 里永远看不到 dae
+> 表，别用 nft 判断它是否在接管——看 `/var/log/daed/daed.log` 的
+> `Routing match` 行。另：daed UI 里"停止再启动"可能只拉起 Web 面板、
+> 核心未加载（无任何 eBPF/Routing 日志、代理全断），此时用
+> `/etc/init.d/daed restart` 完整重启。
+
+### 上游 MTU 黑洞加固：主机路由 MTU + MSS 钳制（2026-11-03 实战）
+
+上游网关对国际方向走隧道（:443 实测 MTU≈1280、其它端口≈1492），**超尺寸段静默丢弃且不回 ICMP**。WAN 口 MTU 1500 让本机与客户端按 MSS 1460 切段 → 直连自建域名的 TLS 在 ClientHello 后永远卡死，reality 节点也被连坐团灭（完整分析见 [troubleshooting 情况 N](docs/troubleshooting.md)）。两项加固缺一不可：
+
+```sh
+# ① 三台自建 VPS 各加一条 /32 mtu 1280 主机路由
+#    （本机 TCP 的 MSS 由路由 MTU 决定 → 自动 1240；QUIC/hy2 走默认路由不受影响）
+n=0
+for ip in 82.139.215.223 216.23.86.169 154.82.20.241; do
+  n=$((n+1))
+  uci set network.vpsmtu$n='route'
+  uci set network.vpsmtu$n.interface='wan'
+  uci set network.vpsmtu$n.target="$ip/32"
+  uci set network.vpsmtu$n.gateway='172.17.48.1'    # ← 换成本机 WAN 网关
+  uci set network.vpsmtu$n.mtu='1280'
+done
+uci commit network
+for ip in 82.139.215.223 216.23.86.169 154.82.20.241; do
+  ip route replace "$ip/32" via 172.17.48.1 dev eth1 mtu 1280   # ← 立即生效，网关/接口按实际
+done
+```
+
+```sh
+# ② fw4 include：SYN 上把 MSS>1240 钳到 1240（管「服务器→客户端」方向的分段）
+cat > /etc/nftables.d/20-mss-clamp.nft <<'EOF'
+chain mss_clamp_output {
+    type filter hook output priority mangle; policy accept;
+    oifname "eth1" tcp flags syn tcp option maxseg size > 1240 tcp option maxseg size set 1240
+}
+chain mss_clamp_forward {
+    type filter hook forward priority mangle; policy accept;
+    oifname "eth1" tcp flags syn tcp option maxseg size > 1240 tcp option maxseg size set 1240
+}
+EOF
+# 即时生效（不想 fw4 restart 闪断，用 runtime add 等价加载）：
+nft add chain inet fw4 mss_clamp_output '{ type filter hook output priority mangle; policy accept; }'
+nft add rule  inet fw4 mss_clamp_output 'oifname "eth1" tcp flags syn tcp option maxseg size > 1240 tcp option maxseg size set 1240'
+nft add chain inet fw4 mss_clamp_forward '{ type filter hook forward priority mangle; policy accept; }'
+nft add rule  inet fw4 mss_clamp_forward 'oifname "eth1" tcp flags syn tcp option maxseg size > 1240 tcp option maxseg size set 1240'
+```
+
+验收：`curl -sk -o /dev/null -w '%{http_code} %{time_total}s\n' https://relay.haoqi90.top/` 路由器本机与 LAN 客户端都应在 1s 内返回；daed 日志不再出现 `failed to dial <VPS>:443`，被连坐的 reality dialer 在一个检测周期内 `NOT ALIVE → ALIVE` 集体复活。
+
+> **为什么不是别的方案**：`TCPMSS` 钳制只重写 SYN 选项、管不住本机发送栈（本机必须靠主机路由 MTU）；把 WAN 口 MTU 全局降到 1280 会杀死 hysteria2 的 QUIC（实测 hy2 dialer 全灭、代理组下线）。组合拳 = TCP 走 /32 小 MTU、UDP/QUIC 走默认 1500。
+
+---
+
+## daed 的手动步骤（GUI）
+
+daed 的配置保存在 `/etc/daed/wing.db`（SQLite 数据库）。按约定**本脚本绝不直接写库**，只生成片段并做只读检查；分组、全局/节点检测、DNS/Routing 都需要在 GUI 中手工完成一次（完整重放手册见 [docs/reapply-runbook.md](docs/reapply-runbook.md)）：
+
+1. 打开 daed 面板（LuCI → 服务 → daede，或独立面板地址）
+2. **配置 → 分组**：按下表创建（`doh` 组的设计依据见「fallback DoH 上游钉到 doh 专用组」；节点命名建议带协议，`doh` 组用 `hysteria2|reality` 正则过滤依赖它）
+
+   | 分组 | 成员 | 策略 | 用途 |
+   |---|---|---|---|
+   | `proxy`（同 `DAED_GROUP_PROXY`） | 主订阅全量（hy2+reality 混合无妨） | `min` | 日常代理 |
+   | `premium`（同 `DAED_GROUP_PREMIUM`） | premium 订阅全量（单 VPS 保持独占） | `min` | 出口质量敏感规则 |
+   | `doh` | 每台 VPS 的订阅各加一个 + `hysteria2\|reality` 过滤 | `min` | fallback DoH 承载：跨 VPS + 协议多样（两条硬要求） |
+   | `tailscale-ctrl` / `tailscale-derp` | 出口在对应 VPS 本机的节点 | `min` | headscale 锁出口（可选） |
+
+3. **配置 → 全局 / 节点检测**：参照 `/root/openwrt-dns-daed/daed/daed-global-settings.txt` 逐项填写；`check_tolerance` 建议 50ms（0 容差会在几 ms 差距间反复换节点）
+4. **配置 → DNS**：用 `/root/openwrt-dns-daed/daed/daed-dns.dae` 的内容整体替换并保存
+5. **配置 → Routing**：用 `/root/openwrt-dns-daed/daed/daed-routing.dae` 的内容整体替换并保存
+6. 重启 daed：`/etc/init.d/daed restart`（daed UI 里的停止/启动可能只拉起面板、核心不加载）
+7. 运行 `check` 复查
+
+生成的 DNS / Routing 片段长这样（按你的配置自动生成）：
+
+```text
+dns {
+    ipversion_prefer: 4
+    upstream {
+        alidns: 'https://223.5.5.5/dns-query'
+        cloudflaredns: 'https://1.1.1.1/dns-query'
+    }
+    routing {
+        request {
+            qname(geosite:cn) -> alidns
+            fallback: cloudflaredns
+        }
+    }
+}
+
+routing {
+    pname(dnsmasq, https-dns-proxy) -> must_direct
+
+    # 节点入口精确直连（IP + 协议 + 端口）
+    dip(203.0.113.10/32) && l4proto(tcp) && dport(33973) -> must_direct
+    dip(203.0.113.10/32) && l4proto(udp) && dport(50757) -> must_direct
+
+    dip(224.0.0.0/3, 255.255.255.255/32, 'ff00::/8') -> direct
+    domain(suffix: example.corp, geosite:private) -> direct
+    dip(geoip:private) -> direct
+
+    domain(geosite:anthropic, geosite:paypal) -> premium   # 需在 CN 规则之前
+    domain(suffix: xiaohongshu.com, ...) -> proxy          # 需在 CN 规则之前
+
+    domain(geosite:cn) -> direct
+    dip(geoip:cn) -> direct
+    fallback: proxy
+}
+```
+
+> **重装提示**：daed GUI 支持配置导出/导入。重装 OpenWrt 时先导出 daed 配置，装好后再导入，最后运行本脚本核对。
+
+---
+
+## 脚本到底改了什么
+
+<details>
+<summary>点击展开完整变更清单</summary>
+
+**dnsmasq（`/etc/config/dhcp`）**
+
+- `noresolv='1'`：忽略 `/tmp/resolv.conf.d/resolv.conf.auto` 中 WAN 下发的 DNS（公司 DNS 即使出现在这里也不会被使用）
+- `dns_redirect='0'`：关闭 dnsmasq 自带的 DNSMASQ HIJACK，DNS 强制接管只由 https-dns-proxy 一家负责
+- 清理 `server` / `doh_server` / `doh_backup_server` 中的失效条目：`127.0.0.1#5054`、`127.0.0.1#5055` 等非 5053 环回端口、明文 IPv4/IPv6 上游（如 `223.5.5.5` 或 `2001:4860:4860::8888`）
+- **保留** `/域名/` 形式的域限定条目（https-dns-proxy 管理的 canary，如 `/mask.icloud.com/`）
+- 确保唯一普通上游 `server=127.0.0.1#5053`
+
+**https-dns-proxy（`/etc/config/https-dns-proxy`）**
+
+- 实例唯一化：只保留一个 `@https-dns-proxy` 实例（历史多实例 5054/5055 已废弃）
+- 删除 `notrack_dns`（版本相关的隐藏行为）
+- `canary_domains_icloud=1`、`canary_domains_mozilla=1`、`dnsmasq_config_update='*'`
+- `force_dns=1`，`force_dns_port` = `53 853`，`force_dns_src_interface` = `lan`
+- `procd_trigger_wan6=0`、heartbeat 三项、`user=nobody`、`group=nogroup`、`listen_addr=127.0.0.1`
+- 实例：`resolver_url` = AliDNS DoH，`bootstrap_dns` = `223.5.5.5,223.6.6.6`，`listen_port=5053`
+
+**network / dhcp 的 LAN 侧（仅当 `DISABLE_IPV6=1`）**
+
+- `network.wan.ipv6='0'`、`network.wan6.proto='none'`、删除 `network.globals.ula_prefix`
+- `LAN_IFACES` 各接口的 `ra` / `dhcpv6` / `ndp` = `disabled`
+- 有实际变更时先 `network reload` + 重启 odhcpd，再走下面的服务重启
+- reload 后主动清理 LAN/WAN 设备上残留的 global 域 IPv6 地址（ULA/动态 GUA；link-local 与非本脚本管理的接口如 tailscale0 不受影响）
+
+**重启顺序**：dnsmasq → https-dns-proxy（`DISABLE_IPV6=1` 且有变更时，最前面额外 network reload + odhcpd）
+
+**daed**：生成带 `ipversion_prefer: 4` 的 DNS 片段，并生成全局/节点检测 GUI 设置清单；不直接改动 `wing.db` 或防火墙其他规则（LAN/WAN 接口配置仅在 `DISABLE_IPV6=1` 时按上节调整）
+
+</details>
+
+---
+
+## 验证
+
+```sh
+sh /root/openwrt-dns-daed/openwrt-dns-daed.sh check
+```
+
+逐项检查（只读）：dnsmasq UCI 与运行态、https-dns-proxy 全部选项与实例数、监听端口、nftables（53 重定向 / 853 拒绝 / 无 DNSMASQ HIJACK）、nslookup 连通性、IPv6 禁用状态与运行态残留地址（`DISABLE_IPV6=1` 时）、daed 片段与 wing.db（含 `-wal`）信号。输出示例：
+
+```text
+== 验证链路 A: dnsmasq / https-dns-proxy / nftables ==
+[ ok ] dnsmasq noresolv=1
+[ ok ] dnsmasq 上游包含 127.0.0.1#5053
+[ ok ] 无失效的 127.0.0.1#50xx 残留
+[ ok ] dns_redirect=0（无 DNSMASQ HIJACK 重复劫持）
+...
+结果: 32 通过, 0 失败, 1 警告, 2 跳过
+```
+
+有任何 FAIL 时按提示排查，常见定位方法见 [docs/troubleshooting.md](docs/troubleshooting.md)。
+
+---
+
+## 更新 / 回退 / 清理
+
+**更新**
+
+```sh
+# 方式一：重新执行在线一键安装命令（始终拉最新脚本）
+curl -fsSL https://raw.githubusercontent.com/blooddrunk/openwrt-dns-daed/main/openwrt-dns-daed.sh | sh -s -- install
+
+# 方式二：脚本内置自更新地址，直接运行即可（fork 仓库请在配置文件中覆盖 SCRIPT_SELFUPDATE_URL）
+sh /root/openwrt-dns-daed/openwrt-dns-daed.sh update
+```
+
+`install` 是幂等的：重复运行不会产生重复条目，也不会覆盖你的配置文件。
+
+**回退**
+
+```sh
+ls /root/openwrt-dns-daed/backups/                 # 查看备份点
+sh /root/openwrt-dns-daed/openwrt-dns-daed.sh rollback           # 回退到最近一次
+sh /root/openwrt-dns-daed/openwrt-dns-daed.sh rollback --to /root/openwrt-dns-daed/backups/20260814-120000
+sh /root/openwrt-dns-daed/openwrt-dns-daed.sh rollback --with-daed   # 连 wing.db 一起恢复（慎用）
+```
+
+每次 `install`/`backup` 前自动创建备份，包含：`uci export` 与原始配置文件、nftables 规则集快照、`wing.db`（及未 checkpoint 的 `-wal`）副本。默认保留最近 8 份。
+
+**清理**
+
+```sh
+sh /root/openwrt-dns-daed/openwrt-dns-daed.sh clean           # 删除片段/日志/脚本副本，保留备份与配置
+sh /root/openwrt-dns-daed/openwrt-dns-daed.sh clean --purge   # 全部删除
+```
+
+`clean` **不会**还原任何 UCI/daed 配置；需要还原请先 `rollback`。
+
+---
+
+## 常见问题
+
+**Q: WAN DNS 里出现公司 DNS，是被用了吗？**
+只要 dnsmasq 运行态存在 `no-resolv` 就不会。`/tmp/resolv.conf.d/resolv.conf.auto` 只是 WAN 下发记录，不必盯着它排障。
+
+**Q: dnsmasq 里又出现 5054/5055 了？**
+重跑 `install` 即可清理（幂等），或按 [troubleshooting](docs/troubleshooting.md) 情况 B 手工处理。
+
+**Q: 开 daed 后 DNS 失效 / 回环？**
+检查 Routing 开头是否有 `pname(dnsmasq, https-dns-proxy) -> must_direct`，这是防止 daed 接管自身 DNS 形成回环的关键（情况 D）。
+
+**Q: v2rayN 真连接延迟 `-1 ms`？**
+节点 endpoint 被 `fallback: proxy` 再次捕获形成代理套代理。按 `IP+协议+端口` 精确 `must_direct`（情况 G）。本脚本生成的片段已按此原则生成，确认 `NODE_ENDPOINTS` 填写正确并在 GUI 粘贴即可。
+
+**Q: 域名还是被解析到错误 IP？**
+确认 daed DNS 已全部 DoH 化（情况 E）——GUI 中不能再有 `udp://...:53` / `tcp+udp://...:53` 上游。
+
+**Q: 时不时「国内能上、外网全挂」，重启 daed 有时能恢复？**
+典型根因是 WAN 上有「有名无实」的 IPv6：daed 用 v6 拨 DoH 上游超时 → 国外域名 SERVFAIL → 节点域名也解析不出 → 代理整体下线。重启只是复位状态。用 `ping -6 2400:3200::1` 验证 v6 是否真通；不通则在配置中设 `DISABLE_IPV6="1"` 重跑 `install`（见 [整机禁用 IPv6](#整机禁用-ipv6disable_ipv6可选) 与 [troubleshooting 情况 F](docs/troubleshooting.md)）。
+
+**Q: 我的宽带有 IPv6，但 VPS 节点的 IPv6 不稳定，应该怎么办？**
+默认生成的 daed DNS 片段包含 `ipversion_prefer: 4`，并且全局节点检测清单只保留 IPv4 检测。注意：该设置只影响 daed 处理的 DNS，且实测部分版本并不会过滤 AAAA；脚本的 LAN `dnsmasq → https-dns-proxy` 链路返回的 AAAA 也需单独处理。最彻底的做法是 `DISABLE_IPV6="1"` 整机关闭 IPv6。详见 [troubleshooting 情况 F](docs/troubleshooting.md)。
+
+**Q: 直连自建域名（或任何站点）能握手、小包都通，但页面/大文件永远加载不出？**
+上游 MTU 黑洞：上游隧道静默丢弃超尺寸段，ClientHello 第一段就过不去。WSL2 客户端「碰巧能通」是 NAT 后天然 MSS 1240 的假象，别被骗。判定与修法（/32 mtu 1280 主机路由 + fw4 MSS 钳制）见 [troubleshooting 情况 N](docs/troubleshooting.md) 与 README「上游 MTU 黑洞加固」。
+
+更多见 [docs/troubleshooting.md](docs/troubleshooting.md)。
+
+---
+
+## 已知限制
+
+1. **强 53 / 拒 853 ≠ 封锁所有 DoH**：客户端仍可能自行通过 443 端口访问第三方 DoH。canary 域名能约束部分系统/浏览器行为，但不等于全网封锁。
+2. **daed 部分需要手动粘贴一次**：本脚本不直接写 `wing.db`，DNS/Routing 需在 GUI 中粘贴脚本生成的片段（这也是 daed 官方推荐方式）。
+3. **`force_dns` 端口重定向**只覆盖 `LAN_IFACES` 指定的接口（默认 `lan`）。
+4. 默认 `ipversion_prefer: 4` 只影响 daed DNS，不会自动过滤 `https-dns-proxy` 链路返回的 AAAA（部分 daed 版本对自身处理的查询也不过滤）；需要硬保证时用 `DISABLE_IPV6="1"`。
+5. https-dns-proxy 未来版本的 UCI 选项如有变化，`check` 会以 FAIL 形式提示差异，便于及时发现。
+
+---
+
+## 安全注意事项
+
+- **本仓库所有文件均已脱敏**：节点 IP 使用 RFC 5737 文档保留地址占位，内网域名使用 `example.corp` 占位。推送前请再次确认没有误提交真实节点 IP、公司域名。
+- 切勿提交/公开：daed Dashboard 密码、订阅 URL、节点 UUID/密钥、Reality/TLS 私钥、API Token。
+- DNS 与 Routing 规则本身可以公开，但涉及公司内部域名时请保持脱敏。
+- 备份目录 `/root/openwrt-dns-daed/backups/` 含 `wing.db` 副本（内含订阅与节点信息），**不要**把该目录内容贴到公开场合。
+
+---
+
+## 项目结构与开发
+
+```text
+openwrt-dns-daed/
+├── openwrt-dns-daed.sh            # 主脚本（单文件、自包含、POSIX sh）
+├── openwrt-dns-daed.conf.example  # 配置模板（与脚本内嵌模板一致）
+├── docs/
+│   ├── principles.md              # 架构与原理（为什么这样配）
+│   ├── reapply-runbook.md         # 新路由器重放整套方案的 runbook
+│   └── troubleshooting.md         # 常见故障快速定位
+├── examples/
+│   └── routing-extra.dae.example  # routing-extra.dae 脱敏模板（doh 钉住/回程/隧道等）
+├── tests/
+│   ├── bin/uci                    # uci 命令最小替身（状态持久化）
+│   ├── fixtures/                  # 脏/净状态种子、nft/netstat/wing.db 样本
+│   ├── run_tests.sh               # 沙箱冒烟测试（无需真实路由器）
+│   └── README.md                  # 测试说明
+├── LICENSE                        # MIT
+└── README.md
+```
+
+本地开发验证（无需 OpenWrt 设备）：
+
+```sh
+dash -n openwrt-dns-daed.sh && busybox sh -n openwrt-dns-daed.sh   # 语法检查
+sh tests/run_tests.sh                                              # 沙箱冒烟测试
+```
+
+测试沙箱用 uci/nft/netstat/nslookup/ip 替身模拟路由器环境，覆盖 install 修复脏状态、幂等重跑、备份、回退（含 wing.db）、清理、模板生成等场景（153 项断言）。
+
+---
+
+## License
+
+[MIT](LICENSE)

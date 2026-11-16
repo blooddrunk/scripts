@@ -1,0 +1,298 @@
+# 常见故障快速定位
+
+> 配合 `openwrt-dns-daed.sh check` 使用；本文按症状组织，命令均可在路由器 SSH 中直接执行。
+
+## 情况 A：WAN DNS 里出现公司 DNS，担心被使用
+
+先看：
+
+```sh
+uci show dhcp.@dnsmasq[0] | grep noresolv
+grep -Rns '^no-resolv' /tmp/etc/dnsmasq.conf.* 2>/dev/null
+```
+
+只要运行态有 `no-resolv`，就不要继续盯着 `/tmp/resolv.conf.d/resolv.conf.auto` 排障——它只是 WAN 下发记录，不是实际上游。
+
+## 情况 B：dnsmasq 里又出现 5054 / 5055
+
+```sh
+uci show dhcp.@dnsmasq[0] | grep -E 'server|doh_'
+netstat -lnptu 2>/dev/null | grep -E '(:5053|:5054|:5055)[[:space:]]'
+```
+
+如果只有 5053 在监听，则 5054/5055 是失效条目。最快的处理方式是重跑一次幂等安装：
+
+```sh
+sh /root/openwrt-dns-daed/openwrt-dns-daed.sh install
+```
+
+或手工清理（`del_list` 提示条目不存在可忽略）：
+
+```sh
+for opt in server doh_server doh_backup_server; do
+  uci del_list dhcp.@dnsmasq[0].${opt}='127.0.0.1#5054'
+  uci del_list dhcp.@dnsmasq[0].${opt}='127.0.0.1#5055'
+done
+uci commit dhcp && /etc/init.d/dnsmasq restart
+```
+
+## 情况 C：DNS 规则看起来重复
+
+```sh
+nft list ruleset 2>/dev/null | grep -i -C 4 \
+  -E 'https-dns-proxy|DNSMASQ HIJACK|dport (53|853)'
+```
+
+目标状态：
+
+- `dstnat_lan` 中 TCP/UDP 53 → `redirect to :53`
+- `forward_lan` 中 TCP/UDP 853 → REJECT
+- **不再出现** `DNSMASQ HIJACK`（它由 `dns_redirect='0'` 控制）
+
+## 情况 D：开 daed 后 DNS 失效 / 出现回环
+
+第一优先检查 Routing 开头是否有：
+
+```text
+pname(
+    dnsmasq,
+    https-dns-proxy
+) -> must_direct
+```
+
+必须是 `must_direct`，不能是普通 `direct`。
+
+## 情况 E：国外域名仍出现可疑解析
+
+检查 daed DNS 是否误退回传统 53 端口：
+
+```text
+错误示例:  udp://223.5.5.5:53        tcp+udp://8.8.8.8:53
+正确:      https://223.5.5.5/dns-query   https://1.1.1.1/dns-query
+```
+
+`openwrt-dns-daed.sh check` 会对 `wing.db`（含 `-wal`）做只读信号检查并提示；daed 的最新配置在 WAL 未 checkpoint 时只存在于 `wing.db-wal` 中，脚本两份都查。
+
+**若 check 报「疑似仍是明文 :53 上游」但 GUI 明明已是 DoH**：多半是主库里的**历史行残影**——SQLite 的自由页会保留旧行版本（如 daed 初装的默认 `udp://223.5.5.5:53`），外部工具 checkpoint/覆盖过 wing.db 后残影落入主库，触发脚本「主库含明文即明文」的兜底判定。确认当前行干净（以 GUI 显示为准）后，可停 daed 对主库做一次 `VACUUM` 重建清掉自由页残影，再 `check` 复测：
+
+```sh
+/etc/init.d/daed stop
+sqlite3 /etc/daed/wing.db 'VACUUM;'   # 无 sqlite3 时可用任意 SQLite 工具处理副本后回传
+/etc/init.d/daed start
+```
+
+## 情况 F：宽带有 IPv6，但 VPS 节点 IPv6 不稳定
+
+如果节点本身没有 IPv6、IPv6 线路没有优化，或节点的 IPv6 质量不稳定，按以下方式设置 daed：
+
+1. 在 **配置 → DNS** 中粘贴脚本生成的 `daed-dns.dae`，确认包含：
+
+   ```text
+   ipversion_prefer: 4
+   ```
+
+   对同时有 A/AAAA 记录的域名，daed 将仅响应 A，对 AAAA 返回空答案。
+2. 在 **配置 → 全局 / 节点检测** 中按 `daed-global-settings.txt` 填写：TCP 使用 `http://cp.cloudflare.com` 和 IPv4 `1.1.1.1`，UDP 使用 `223.5.5.5:53`，不要填写 TCP/UDP IPv6 检测地址。
+3. “引导解析器”留空、“备用解析器”保持 IPv4 的 `8.8.8.8:53` 即可；这两个字段不是 LAN 客户端的日常 DNS，也不是 DNS 片段中的 DoH 上游。
+
+该设置只影响 daed 的 DNS。若 LAN 客户端仍拿到 AAAA，这是 `dnsmasq → https-dns-proxy` 链路的独立问题（实测部分 daed 版本连自身处理的 AAAA 查询也不会过滤，向 `192.168.10.1` 查 google 的 AAAA 仍会返回真实记录）。
+
+**根治手段（推荐）**：当 WAN 上的 IPv6「有名无实」时（有全球地址但 `ping -6 2400:3200::1` 不通，或上级 NAT 不下发 PD），在 `/etc/openwrt-dns-daed.conf` 设置：
+
+```sh
+DISABLE_IPV6="1"
+```
+
+重跑 `install` 即可整机禁用 IPv6（WAN 获取 / ULA / LAN RA 全关，详见 README「整机禁用 IPv6」）。此时客户端没有 IPv6 地址，AAAA 记录即使返回也无害。
+
+install 同时会清理 LAN/WAN 设备上残留的 ULA/动态 IPv6 地址（v1.2.0 起）——实测仅 reload network 并不总是移除已分配的地址，br-lan 上会长期残留 deprecated ULA，客户端会把它继续当 DNS 服务器使用。已部署旧版本、暂不便重跑 install 的，可手动清理或重启路由器达到同等效果：
+
+```sh
+ip -6 addr show dev br-lan | grep "scope global"   # 找到残留地址
+ip -6 addr del fde7:xxxx::1/60 dev br-lan          # 逐个删除
+```
+
+### 情况 F 附：间歇性「外网全挂、重启 daed 有时恢复」的完整链条
+
+若日志同时出现下面三类信息，基本可以确定是同一个根因——WAN 上的假 IPv6：
+
+```text
+WARN DNS ingress fast path failed; sending SERVFAIL ... error=Get "https://[2606:4700:...]:443/dns-query...": TLS handshake timeout   # daed 用不通的 v6 拨 DoH 上游
+WARN handleConn: failed to dial ... [REALITY]: dial to xxx.example.top:443: bootstrap resolver returned no usable address                # DNS 瘫痪连累节点域名解析
+WARN Marking dialer as unavailable due to persistent proxy IP failures ...                                                            # 节点被标记不可用，代理整体下线
+```
+
+链条：v6 拨 DoH 上游超时 → 国外域名 SERVFAIL（国内 alidns 正常，所以只有外网挂）→ 节点域名解析不出 → dialer 标记不可用 → v4/v6 代理流量全部超时。重启 daed 只是复位 DNS 连接与 dialer 状态，不是必然恢复；`DISABLE_IPV6="1"` 才是根治。
+
+**关于 fallback DoH 上游的补充（排障必读）**：daed 自身对 DoH 上游（如 cloudflare-dns.com）的查询也会被 dae 按 Routing 分流，通常命中 `fallback: proxy` 从节点出口发出（这也是国外域名答案不被污染的原因）。判别证据：
+
+```text
+WARN DNS forward to upstream failed dialer=xx-hysteria2 ... network=tcp+4
+     outbound=proxy target=104.16.248.249:443 upstream=https://cloudflare-dns.com:443/dns-query
+```
+
+两个推论：
+
+1. 此时的报错 `http3: parsing frame failed: timeout: no recent network activity` 来自 **Hysteria2 隧道的 QUIC 层**，不是 DoH3（dae 中 `https://` 本来就是 TCP/h2，`h3://` 才是 DoH3），GUI 里没有「DoH3 改 DoH」的开关可动；
+2. fallback DNS 的可用性 = 所选节点的可用性。Hysteria2（UDP）受 QoS 抖动时 DoH 跟着抖。若日志中 `DNS forward to upstream failed` 集中在某 `-hysteria2` dialer 上，可在 Routing 的 `fallback: proxy` 之前把 Cloudflare DoH 的 IP 固定到专用承载组：
+
+   ```text
+   dip(104.16.248.249/32, 104.16.249.249/32) -> doh
+   ```
+
+   （钉住组**必须跨 VPS 且协议多样（reality+hysteria2 混入）**——2026-10-30 实战修订引入跨 VPS 硬要求；2026-11-02 再修订：DoH 钉住组若只有一台 VPS 的节点（hy2+reality 同入口 IP），VPS 抖动时整组全灭；而 reality-only 的跨 VPS 组也会被**协议级/端口级封锁**团灭（见情况 L 根因 4），过滤正则用 `hysteria2|reality`。只有一台 premium VPS 时另建跨 VPS `doh` 组，`premium` 留给按出口质量选路的规则。`cloudflare-dns.com` 的 A 记录长期为这两个地址，可用 `nslookup cloudflare-dns.com 223.5.5.5` 复核。也可再加一条 `domain(suffix: cloudflare-dns.com) -> doh` 覆盖 A 记录变化——注意这条流量只能靠 SNI 嗅探命中 domain 规则，`dip` 是确定性兜底，详见 README「fallback DoH 上游钉到 doh 专用组」。）
+
+## 情况 G：开启 daed 后，v2rayN 真连接延迟 `-1 ms`
+
+关闭 daed 后节点测试立即恢复 → 代理节点 endpoint 被 `fallback: proxy` 再次捕获。按「目标 IP + 协议 + 端口」精确 `must_direct`：
+
+```text
+dip(203.0.113.10/32) && l4proto(tcp) && dport(47664) -> must_direct
+dip(203.0.113.10/32) && l4proto(udp) && dport(55529) -> must_direct
+```
+
+**不要**为了修测速写成 `dip(203.0.113.10/32) -> must_direct`（整台 VPS 直连），否则同机部署的 1Panel / Web / HTTPS 等普通服务也会被强制直连。
+
+验证顺序：
+
+1. 保持 daed 开启
+2. 应用 endpoint 精确规则（确认已在 GUI 粘贴最新 Routing）
+3. v2rayN 重新测试 Reality / Hysteria2 真连接延迟
+4. 访问该 VPS 上的 Web 服务，确认其仍可经 `fallback: proxy` 获得较好访问速度
+
+## 情况 H：install/check 报 https-dns-proxy 选项 FAIL
+
+https-dns-proxy 的 UCI 选项在不同版本间偶有增减。如果 `check` 报某选项不符：
+
+1. `opkg list-installed | grep https-dns-proxy` 确认版本
+2. `uci show https-dns-proxy` 核对该版本实际支持的选项
+3. 重跑 `install` 让脚本按目标值重新写入
+
+## 情况 I：需要彻底还原本脚本的所有改动
+
+```sh
+sh /root/openwrt-dns-daed/openwrt-dns-daed.sh rollback          # 还原 UCI（最近一次备份）
+sh /root/openwrt-dns-daed/openwrt-dns-daed.sh rollback --with-daed   # 连 daed 数据库一起还原
+sh /root/openwrt-dns-daed/openwrt-dns-daed.sh clean --purge     # 删除脚本全部产物
+```
+
+`rollback --with-daed` 会用备份时的 `wing.db`（连同 `-wal`，备份存在时）覆盖当前数据库，并先清除现役 `-wal`/`-shm` 以免新旧文件叠加错乱（备份之后的 daed 改动全部丢失），仅在你确定需要时使用。
+
+## 情况 J：daed 启动报错 / 无法启动
+
+daed 自身日志里常见两类「看不出原因」的报错，含义与处理如下：
+
+| 日志关键词 | 含义 | 处理 |
+| --- | --- | --- |
+| `blocked preconditions: tun-missing`（或提到 `/dev/net/tun`） | 内核没有提供 TUN 设备，daed 启动前提不满足 | `opkg update && opkg install kmod-tun` 后**重启路由器**；LXC/Docker 里跑 OpenWrt 的，需在宿主机开启 `/dev/net/tun` |
+| `Operation not permitted` / 提到特权不足 | daed 没有以 root/CAP_NET_ADMIN 特权运行 | 用 `/etc/init.d/daed restart` 以服务方式启动（procd 会授予特权），不要手动降权运行二进制 |
+| `address already in use` | 端口被占用（常见 53/853 与 dnsmasq 冲突） | `netstat -lnptu | grep -E '(:53|:5053|:853)'` 找到占用者后停用 |
+
+验证 TUN 是否就绪：
+
+```sh
+ls -l /dev/net/tun        # 应显示字符设备 c 10 200
+```
+
+脚本侧的配合：`check` 会在 daed 已安装时自动检查 `/dev/net/tun`；`install --restart-daed` 或服务重启失败时，脚本会原样展示服务输出并对上表关键词给出「原因/解决」提示，无需再搜索。
+
+其他 daed 报错先看完整上下文：
+
+```sh
+logread -e daed | tail -n 30
+```
+
+## 情况 K：脚本自身报 [错误] 并退出
+
+脚本的致命错误（`[错误]` + 退出）都会在下一行输出 `原因/解决:` 提示，按提示操作即可。常见几类：
+
+- **无法写入 / 无法创建目录**：Flash 空间不足或分区只读，`df -h` 排查；空间紧张时可用 `DD_WORK_DIR` 指向 USB 存储。
+- **下载失败（update）**：路由器出站网络/DNS/防火墙问题，或自更新地址失效；按提示 `curl -fsSL <地址>` 手动验证。
+- **未找到可用备份（rollback）**：还没有备份，先运行 `backup`。
+- **恢复配置失败（rollback）**：备份文件损坏或不兼容，按提示手动 `uci import` 查看具体报错。
+
+`check`/`install` 结束若有 FAIL，会输出「FAIL 修复速查」段落，逐条给出一行式修复命令。
+
+## 情况 L：国外域名解析 SERVFAIL，日志大量 `no proper dialer for DNS upstream`
+
+```text
+WARN DNS ingress fast path failed; sending SERVFAIL response dst=192.168.10.1:53
+     error=no proper dialer for DNS upstream: https://1.1.1.1:443/dns-query ...
+INFO Group has no dialer alive group=premium network=tcp4
+```
+
+含义：daed 自身到 fallback DoH 上游的连接按 Routing 钉在某个分组上，而该分组当前**没有一个存活节点**，于是所有国外域名（`fallback: cloudflaredns`）都返回 SERVFAIL。国内域名（alidns）不受影响，`proxy` 分组也可能一切正常——「分组里明明有可用节点，外网却全挂」就是这个形态。
+
+排查：
+
+```sh
+grep -E "Group has no dialer alive|Marking dialer as unavailable" /var/log/daed/daed.log | tail
+```
+
+常见根因与修法：
+
+1. **DoH 钉住组只有一台 VPS 的节点**（hy2 + reality 共享同一入口 IP），VPS 抖动时整组全灭。修法：钉住组改为**跨 VPS + 协议多样**的节点集合（新建 `doh` 组，规则右侧 `-> doh`），见 README「fallback DoH 上游钉到 doh 专用组」。
+2. 钉住组含 Hysteria2 且被 `min` 策略常态选中：UDP QoS 抖动导致 DoH 间歇失败（`http3:` 报错）。这是**间歇劣化**，与根因 4 的**整组全灭**形态不同；reality 恢复后 `min` 系策略会自动回归 reality 承载。
+3. 全部节点被 `Marking dialer as unavailable due to persistent proxy IP failures` 连坐（上游网络事件/DNS 瘫痪连累节点域名解析）。先解决网络/解析（见情况 F），节点恢复可用后分组自动回血。
+4. **Reality 端口被协议级/端口级封锁团灭（2026-11-02 实战新形态）**：三台不同 VPS 的 Reality/TCP 端口同时被墙，而 VPS 本身存活、同 VPS 的 Hysteria2 正常——`reality` 过滤的跨 VPS doh 组**照样整组全灭**，全部国外域名 SERVFAIL 持续，`proxy` 组流量一切正常。日志特征：全部 reality 节点同时 `Marking dialer as unavailable due to persistent proxy IP failures` + `DNS forward to upstream failed ... [REALITY]: dial to IP:PORT ... connect: connection timed out`。判别（在路由器上）：
+
+   ```sh
+   # 依次测各 VPS：reality 端口 vs 22 端口对照（curl 的 time_connect>0 即 TCP 握手完成）
+   curl -sk --connect-timeout 3 -m 5 -o /dev/null -w '%{time_connect}\n' https://<节点IP>:<reality端口>/
+   curl -sk --connect-timeout 3 -m 5 -o /dev/null -w '%{time_connect}\n' https://<节点IP>:22/
+   ```
+
+   注意：Routing 中节点端口的 `must_direct` 规则会让 reality 端口测试**直连**（测的就是真实链路），而 `:22` 等普通端口会走代理组（测的是「VPS 是否活着」）——reality 端口超时 + `:22` 通 = 端口被墙而非 VPS 宕机。修法：doh 组过滤正则改为 `hysteria2|reality`，hy2 立即接管承载；根治需在 VPS 侧换 reality 端口/传输。同时建议加自建域名直连解析行（`DAED_DNS_SELF_DOMAINS`，见 README「节点去 DNS 依赖」第 3 项），避免 doh 组全灭时连坐节点域名解析。
+
+改完分组/规则后用 `/etc/init.d/daed restart` 完整重启（daed UI 里的停止再启动可能只拉起面板、核心不加载）。
+
+## 情况 M：tailnet 节点反复 offline、子网路由时断时续（管理通道跟着瘫）
+
+```text
+tailscaled: control: map response long-poll timed out!
+tailscaled: Received error: PollNetMap: Post "https://hs-<vps>.haoqi90.top/machine/map": ...
+daed.log:   Group re-selects _new_dialer=<vps>-reality-tcp-… _old_dialer=<vps>-hysteria2 group=tailscale-ctrl min=0s
+```
+
+含义：headscale 控制面/DERP 分组（`tailscale-ctrl` / `tailscale-derp`）按整订阅（hy2+reality）建组，而 reality 节点处于「间歇被墙→急救探测复活」的翻动状态时，dae 的 `min` 系策略会被复活瞬间 **`min=0s` 的未测延迟**吸引切过去——控制面长轮询随即超时，tailnet 节点在控制面视角反复 offline/online，**子网路由被撤回**，经 tailnet 的管理通道随之时断时续（2026-11-02 实战，与情况 L 根因 4 是同一封锁事件的另一种表现）。
+
+排查：`tailscale status` 自身行显示 `offline` 翻动 + 上述 `min=0s` 选点日志。
+
+修法：`tailscale-ctrl` / `tailscale-derp` 组加 `hysteria2` 过滤（出口仍锁对应 VPS）。控制面/DERP 是长连接、看稳定性不看吞吐，见 README「自建 Headscale 场景」。直改库：`UPDATE group_subscriptions SET name_filter_regex='hysteria2' WHERE group_id IN (<ctrl>,<derp>)`。
+
+## 情况 N：自建域名直连「能握手、永远加载不出」——上游 MTU 黑洞大段静默丢弃
+
+```text
+curl https://relay.haoqi90.top  → code=000 满超时（但 ping 通、TCP 握手成功、DNS 正常）
+daed.log:  WARN handleConn: failed to dial 82.139.215.223:443: context deadline exceeded
+daed.log:  WARN Marking dialer as unavailable due to persistent proxy IP failures dialer=…reality…
+tcpdump:   本机.x > VPS.443: Flags [.], seq 1:1445, length 1444   ← 同一段无限重传
+           VPS.443 > 本机.x: …, sack 1 {1445:1569}                ← 服务器只收到后半段
+```
+
+含义：**上游网关对国际方向走隧道，隧道 MTU 小于 WAN 口声称的 1500**（2026-11-03 实战：:443 方向实测 ≈1280，其它端口 ≈1492），超过隧道 MTU 的段被**静默丢弃、不回 ICMP need-frag**。本机与 LAN 客户端按 MSS 1460 切段，TLS ClientHello 的第一个 1460B 段永远过不去——于是「握手成功、响应永远等不到」。tcpdump 的 SACK 特征（只确认后半段）是铁证。
+
+连坐面极大，同一根因的多种表现：
+
+- 直连自建域名的 HTTPS 全部卡死（本机与真机客户端；WSL2 客户端「碰巧能通」是因为 NAT 后天然 MSS 1240，别被它骗了）；
+- reality 节点的 TCP 拨号大段同样被丢 → `Marking dialer as unavailable … proxy IP failures` 团灭 → doh 组全灭 → 国外域名 SERVFAIL（即情况 L 的又一根因）；
+- 任何「小包都通、大文件必卡」的直连下载。
+
+快速判定（路由器上）：
+
+```sh
+# ① 对照测试：WSL2（MSS 1240）通、路由器本机/手机（MSS 1460）不通 → 基本坐实
+# ② 抓包看 SACK 特征（比 ping -M do 可靠——上游连 ICMP DF 也可能一起黑）
+tcpdump -i eth1 -nn host <VPS-IP> and tcp port 443
+```
+
+修法（两项缺一不可；详见 README「上游 MTU 黑洞加固」）：
+
+1. **自建 VPS 各加一条 `/32 mtu 1280` 主机路由**——本机 TCP 的 MSS 由路由 MTU 决定（自动变 1240），QUIC/hy2 走默认路由不受影响；
+2. **fw4 include 做 MSS 钳制**（`/etc/nftables.d/20-mss-clamp.nft`）——管转发方向「服务器→客户端」的分段跟随我们声明的 MSS。
+
+两个坑（2026-11-03 都踩过）：
+
+- `TCPMSS` 钳制只重写 SYN 里的选项，**对本机 socket 的发送栈无效**（本机照按接口 MTU 切段）——本机流量必须靠主机路由 MTU 解决；
+- **不要把 WAN 口 MTU 全局降到 1280**：会杀死 hysteria2 的 QUIC（实测 daed 所有 hy2 dialer 瘫痪、代理组整体下线）——UDP/QUIC 必须留在 MTU 1500 的默认路由上。
+
