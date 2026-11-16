@@ -1,0 +1,91 @@
+# ============================================================
+# 通用（全仓库生效）
+# ============================================================
+
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# 编辑器 / 系统
+.DS_Store
+*.swp
+*.swo
+*~
+*.Zone.Identifier
+
+# 工具会话产物
+.zcode/
+.playwright-cli/
+
+# 日志
+*.log
+
+# 敏感凭据类文件（公开仓库硬约束，全局兜底）
+.env
+*.pem
+*.key
+*authkey*
+*preauth*
+*privkey*
+
+# ============================================================
+# homelab/headscale-openwrt-bootstrap
+# ============================================================
+
+# 运行期状态与机密文件
+homelab/headscale-openwrt-bootstrap/**/*.state
+homelab/headscale-openwrt-bootstrap/**/*.sqlite
+homelab/headscale-openwrt-bootstrap/**/*.sqlite-shm
+homelab/headscale-openwrt-bootstrap/**/*.sqlite-wal
+
+# 测试 fixture 中的假身份标记文件需要入库
+!homelab/headscale-openwrt-bootstrap/tests/fixtures/openwrt/etc/tailscale/tailscaled.state
+
+# 设备配置快照含真实节点凭据（passwall2 uuid 等），仅保留在本地；
+# 其历史已从本仓库公开历史中滤除，原始完整历史见归档的私有旧仓库
+homelab/headscale-openwrt-bootstrap/backups/
+
+# 测试输出
+homelab/headscale-openwrt-bootstrap/tests/tmp/
+homelab/headscale-openwrt-bootstrap/**/.INCOMPLETE
+homelab/headscale-openwrt-bootstrap/**/manifest.sha256
+
+# ============================================================
+# homelab/openwrt-dns-daed
+# ============================================================
+
+# 测试沙箱与临时产物
+homelab/openwrt-dns-daed/tests/.sandbox/
+homelab/openwrt-dns-daed/tests/.dbg/
+
+# 本地个性化配置（避免误提交真实节点/公司域名）
+homelab/openwrt-dns-daed/**/local*.conf
+
+# 本地排障手册（含公司域名/内网信息，绝不提交）
+homelab/openwrt-dns-daed/**/*.local.md
+
+# ============================================================
+# homelab/substore-operators
+# ============================================================
+
+# 部署实例文件，含订阅地址/节点信息，不入库（模板见 *.example.*）
+homelab/substore-operators/configs/keepwarm.conf
+homelab/substore-operators/configs/node-profile-rules.json
+
+# ============================================================
+# tampermonkey
+# ============================================================
+
+# 各脚本目录下的本地逆向分析材料（含目标站点专有代码，不宜公开分发）
+tampermonkey/**/references/
+
+# ============================================================
+# vps-order/raksmart-api-sniper
+# ============================================================
+
+# 下单参数与运行状态（防重复下单记录），不入库
+vps-order/raksmart-api-sniper/config.json
+vps-order/raksmart-api-sniper/.raksmart-sniper-state.json
