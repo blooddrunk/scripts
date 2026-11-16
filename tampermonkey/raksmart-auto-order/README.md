@@ -5,7 +5,7 @@
 Medusa 后端接口**完成登录检测、报价校验与下单结账——抢购高峰页面
 卡死、按钮失灵等问题不再影响脚本（v1.x 的核心痛点）。
 
-接口逆向细节见 [`../raksmart-api-sniper/README.md`](../raksmart-api-sniper/README.md)
+接口逆向细节见 [`../../vps-order/raksmart-api-sniper/README.md`](../../vps-order/raksmart-api-sniper/README.md)
 （含完整接口文档与独立 Node.js 抢购脚本，追求极限时推荐用那个）。
 
 ## 安装

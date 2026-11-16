@@ -119,11 +119,11 @@ docker run -it -d --restart=always --network host \
 
 | # | 操作类型 | 远程链接 / 配置 |
 | --- | --- | --- |
-| ① | 脚本 | `https://raw.githubusercontent.com/blooddrunk/substore-operators/main/operators/protocol-filter.js` |
+| ① | 脚本 | `https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/substore-operators/operators/protocol-filter.js` |
 | ② | DNS 解析 | 默认参数即可 |
-| ③ | 脚本 | `https://raw.githubusercontent.com/blooddrunk/substore-operators/main/operators/node-profile-filter.js#rulesUrl=<编码后的rules地址>&profile=main` |
-| ④ | 脚本 | `https://raw.githubusercontent.com/blooddrunk/substore-operators/main/operators/google-region-probe.js#api=https%3A%2F%2Fwww.youtube.com%2Fpremium&concurrency=5&http_meta_start_delay=1500&share_by_server=true&timeout=10000` |
-| ⑤ | 脚本 | `https://raw.githubusercontent.com/blooddrunk/substore-operators/main/operators/google-region-check.js#googleStatus=non-cn` |
+| ③ | 脚本 | `https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/substore-operators/operators/node-profile-filter.js#rulesUrl=<编码后的rules地址>&profile=main` |
+| ④ | 脚本 | `https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/substore-operators/operators/google-region-probe.js#api=https%3A%2F%2Fwww.youtube.com%2Fpremium&concurrency=5&http_meta_start_delay=1500&share_by_server=true&timeout=10000` |
+| ⑤ | 脚本 | `https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/substore-operators/operators/google-region-check.js#googleStatus=non-cn` |
 
 顺序要求：
 
@@ -159,7 +159,7 @@ docker run -it -d --restart=always --network host \
 远程脚本：
 
 ```text
-https://raw.githubusercontent.com/blooddrunk/substore-operators/main/operators/protocol-filter.js
+https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/substore-operators/operators/protocol-filter.js
 ```
 
 在 DNS 解析之前做三件事：
@@ -183,7 +183,7 @@ https://raw.githubusercontent.com/blooddrunk/substore-operators/main/operators/p
 线路分组的核心脚本。远程脚本：
 
 ```text
-https://raw.githubusercontent.com/blooddrunk/substore-operators/main/operators/node-profile-filter.js
+https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/substore-operators/operators/node-profile-filter.js
 ```
 
 #### 规则格式
@@ -285,7 +285,7 @@ Premium 池   #rulesUrl=<编码后的rules地址>&profile=premium
 Google「送中」实际出站探测器。通过 HTTP META / Mihomo 为节点建立本地代理并访问 YouTube Premium，判定结果写入 `_googleStatus`。远程脚本：
 
 ```text
-https://raw.githubusercontent.com/blooddrunk/substore-operators/main/operators/google-region-probe.js
+https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/substore-operators/operators/google-region-probe.js
 ```
 
 运行前提：HTTP META 服务（默认 `127.0.0.1:9876`，`xream/sub-store:http-meta` 镜像自带）、mihomo 内核、运行环境内有 `curl` 命令。
@@ -329,7 +329,7 @@ https://raw.githubusercontent.com/blooddrunk/substore-operators/main/operators/g
 根据 `_googleStatus` 过滤，并清理全部临时元数据。远程脚本：
 
 ```text
-https://raw.githubusercontent.com/blooddrunk/substore-operators/main/operators/google-region-check.js
+https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/substore-operators/operators/google-region-check.js
 ```
 
 | `googleStatus` | 结果 |

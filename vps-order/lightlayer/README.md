@@ -6,7 +6,7 @@
 ## 快速开始
 
 ```bash
-cd /home/jelinenaro/code/scripts/lightlayer
+cd vps-order/lightlayer
 cp .env.example .env     # 然后编辑 .env 填入账号密码和产品ID
 python3 lightlayer.py quote    # 第一步: 试算价格(不会下单)
 python3 lightlayer.py order    # 第二步: 正式下单(需输入 y 确认)
@@ -108,20 +108,15 @@ python3 lightlayer.py watch --dry-run --duration 30s
    注意：`GET /api/details` 也被 WAF 拦截，`login` 命令会改用 `/balance` 验证。
 2. **解析支付方式**：`LIGHTLAYER_PAY_METHOD` 为数字 ID 时直接使用（不调接口）；
    为名称时通过 `GET /payment` 解析成 ID。
-3. **解析支付方式**：`LIGHTLAYER_PAY_METHOD` 是名称时，通过 `GET /payment` 找到对应数字 ID。
-4. **自动填写产品配置**：`GET /order/{product_id}` 读取下单表单，按各字段默认值构造
+3. **自动填写产品配置**：`GET /order/{product_id}` 读取下单表单，按各字段默认值构造
    `custom`（格式 `{字段id: {item_id: 值}}`），必填复选框（如 Refunds Policy）自动勾选；
    `LIGHTLAYER_CUSTOM` 可按字段覆盖（例如更换操作系统）。
-5. **试算**（可 `--no-quote` 跳过）：`POST /quote`，展示预计金额及字段校验错误。
-4. **确认后下单**：`POST /order/{product_id}`，成功后打印订单号、账单号、金额。
-5. **支付**：API 不返回支付跳转链接，下单成功后需登录用户中心支付账单：
+4. **试算**（可 `--no-quote` 跳过）：`POST /quote`，展示预计金额及字段校验错误。
+5. **确认后下单**：`POST /order/{product_id}`，成功后打印订单号、账单号、金额。
+6. **支付**：API 不返回支付跳转链接，下单成功后需登录用户中心支付账单：
    `https://account.lightlayer.net/index.php?/clientarea/invoice/<账单ID>`
    （脚本会直接打印该链接； unpaid 状态的订单在账单支付前不会开通）。
-6. **确认后下单**：`POST /order/{product_id}`，成功后打印订单号、账单号、金额。
-7. **支付**：API 不返回支付跳转链接，下单成功后需登录用户中心支付账单：
-   `https://account.lightlayer.net/index.php?/clientarea/invoice/<账单ID>`
-   （脚本会直接打印该链接； unpaid 状态的订单在账单支付前不会开通）。
-8. 下单记录追加保存在 `~/.cache/lightlayer/orders.log`。
+7. 下单记录追加保存在 `~/.cache/lightlayer/orders.log`。
 
 ## 安全提示
 

@@ -54,8 +54,8 @@ LuCI helper）叠加时，最常见的故障是"谁都在管同一个接口/IP/�
 ### VPS 端（headscale-vps.sh）
 
 ```sh
-git clone https://github.com/blooddrunk/headscale-openwrt-bootstrap.git
-cd headscale-openwrt-bootstrap
+git clone https://github.com/blooddrunk/scripts.git
+cd scripts/homelab/headscale-openwrt-bootstrap
 
 # 1. 先看看环境是否满足前置条件（只读，不改任何东西）
 sudo ./headscale-vps.sh --domain hs.example.com --expected-public-ip <你的VPS公网IP> plan
@@ -566,7 +566,7 @@ profiles、failover_enabled、subnets 等）。auth key、API token、
 为已审阅的完整 commit SHA，不要用会漂移的 `main`）：
 
 ```sh
-RAW_BASE=https://raw.githubusercontent.com/blooddrunk/headscale-openwrt-bootstrap/<SHA>
+RAW_BASE=https://raw.githubusercontent.com/blooddrunk/scripts/<SHA>/homelab/headscale-openwrt-bootstrap
 TARGET=/root/headscale-openwrt-bootstrap
 fetch() {
     if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"

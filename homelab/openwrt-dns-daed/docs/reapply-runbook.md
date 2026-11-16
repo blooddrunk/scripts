@@ -21,7 +21,7 @@
 ## 1. 安装脚本（生成 conf 模板）
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/blooddrunk/openwrt-dns-daed/main/openwrt-dns-daed.sh | sh -s -- install
+curl -fsSL https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/openwrt-dns-daed/openwrt-dns-daed.sh | sh -s -- install
 ```
 
 ## 2. 填写 `/etc/openwrt-dns-daed.conf`

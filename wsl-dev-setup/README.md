@@ -19,10 +19,10 @@ The shell, Node.js, GitHub CLI, pnpm, and extra CLI tools are independent compon
 
 ## Install directly from GitHub
 
-After creating this repository on GitHub, replace the placeholder with your username and run this inside Ubuntu/WSL:
+Run this inside Ubuntu/WSL:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/wsl-dev-setup/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/blooddrunk/scripts/main/wsl-dev-setup/install.sh | bash
 ```
 
 The interactive menu is available even with `curl | bash`; it reads answers from your terminal. Press Enter for every prompt to accept the defaults. Do not prefix that command with `sudo`; the script asks for sudo only when it needs to install Ubuntu packages or change your login shell.
@@ -30,21 +30,21 @@ The interactive menu is available even with `curl | bash`; it reads answers from
 For an unattended run with the same defaults:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/wsl-dev-setup/main/install.sh | SETUP_NONINTERACTIVE=1 bash
+curl -fsSL https://raw.githubusercontent.com/blooddrunk/scripts/main/wsl-dev-setup/install.sh | SETUP_NONINTERACTIVE=1 bash
 ```
 
 To skip selected components:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/wsl-dev-setup/main/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/blooddrunk/scripts/main/wsl-dev-setup/install.sh | \
   INSTALL_GH=0 INSTALL_EXTRAS=0 bash
 ```
 
 For a version you can inspect before running:
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USERNAME/wsl-dev-setup.git
-cd wsl-dev-setup
+git clone https://github.com/blooddrunk/scripts.git
+cd scripts/wsl-dev-setup
 ./install.sh
 ```
 

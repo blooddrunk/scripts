@@ -1,6 +1,9 @@
 # Tampermonkey 脚本集
 
-个人油猴（Tampermonkey）脚本仓库，**每个脚本一个独立目录**，互不依赖。
+个人油猴（Tampermonkey）脚本集，**每个脚本一个独立目录**，互不依赖。
+本目录是 monorepo `scripts` 中浏览器脚本（依赖 Tampermonkey 插件运行）的统一子项目；
+不依赖浏览器的独立 CLI 工具不放在这里（如 Raksmart 抢购的 Node 版本在
+[`../vps-order/raksmart-api-sniper/`](../vps-order/raksmart-api-sniper/)）。
 
 ## 脚本索引
 
@@ -8,7 +11,10 @@
 |---|---|
 | [网页体验自由 (Web UX Freedom)](web-ux-freedom/) | 解除网站前端体验限制：切屏/失焦检测、强制全屏、禁复制/禁右键、快捷键屏蔽、反反调试、诚信粘贴守卫、PrintScreen 拦截、键盘行为记录器等，全部功能可按站点开关 |
 | [Raksmart VPS 自动下单助手](raksmart-auto-order/) | Raksmart 特价 VPS 定时抢购（**v2 API 直连**）：绕过页面 DOM 直接调 Medusa 后端完成报价校验与下单结账，页面卡顿不影响；按单次/每日场次调度、防重复下单锁、状态面板 |
-| [Raksmart API 直连抢购 (Node)](raksmart-api-sniper/) | 上表的独立 Node.js 版本（零依赖）：自动登录（OAuth 四跳）、时钟校准、场次等待、并行下单、结账输出账单链接；含完整接口逆向文档 |
+
+> Raksmart 抢购的独立 Node.js 版本（不依赖浏览器）已移至
+> [`../vps-order/raksmart-api-sniper/`](../vps-order/raksmart-api-sniper/)，
+> 含完整接口逆向文档。
 
 ## 目录约定
 
@@ -25,7 +31,7 @@
 
 - 验证工具链（Playwright）由根目录 `package.json` 统一提供，
   `npm install` 一次即可供所有脚本的 `demo/verify.mjs` 使用
-- `references/` 与 `.playwright-cli/` 在 `.gitignore` 中按目录名匹配
+- `references/` 与 `.playwright-cli/` 在仓库根 `.gitignore` 中按目录名匹配
   （任意层级生效），各脚本目录下均会自动忽略
 
 ## 验证

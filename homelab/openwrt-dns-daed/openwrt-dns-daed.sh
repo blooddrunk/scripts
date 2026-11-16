@@ -56,7 +56,7 @@ DAED_WING_DB_DEFAULT="${DD_DAED_DB:-/etc/daed/wing.db}"
 
 # update 自更新默认指向本仓库 main 分支；如需指向其他地址，
 # 在 /etc/openwrt-dns-daed.conf 中覆盖 SCRIPT_SELFUPDATE_URL 即可。
-SCRIPT_SELFUPDATE_URL_DEFAULT="https://raw.githubusercontent.com/blooddrunk/openwrt-dns-daed/main/openwrt-dns-daed.sh"
+SCRIPT_SELFUPDATE_URL_DEFAULT="https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/openwrt-dns-daed/openwrt-dns-daed.sh"
 
 # daed（kenzok8/openwrt-daede）官方安装脚本，--install-missing 时使用
 DAED_INSTALLER_URL_DEFAULT="https://raw.githubusercontent.com/kenzok8/openwrt-daede/refs/heads/main/scripts/install.sh"
@@ -481,7 +481,7 @@ MAX_BACKUPS="8"
 DAED_EXTRA_DIR="/etc/openwrt-dns-daed.d"
 
 # update 自更新地址（默认已指向官方仓库；如 fork 或需禁用，取消注释并改写下面一行）
-# SCRIPT_SELFUPDATE_URL="https://raw.githubusercontent.com/blooddrunk/openwrt-dns-daed/main/openwrt-dns-daed.sh"
+# SCRIPT_SELFUPDATE_URL="https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/openwrt-dns-daed/openwrt-dns-daed.sh"
 
 # daed 官方安装脚本地址（--install-missing 时使用）
 DAED_INSTALLER_URL="https://raw.githubusercontent.com/kenzok8/openwrt-daede/refs/heads/main/scripts/install.sh"
@@ -1654,7 +1654,7 @@ ${SCRIPT_NAME} v${SCRIPT_VERSION} —— OpenWrt 防 DNS 劫持一键部署（dn
 
 示例:
   # 在线一键安装
-  curl -fsSL https://raw.githubusercontent.com/blooddrunk/${SCRIPT_NAME}/main/${SCRIPT_NAME}.sh | sh -s -- install
+  curl -fsSL https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/${SCRIPT_NAME}/${SCRIPT_NAME}.sh | sh -s -- install
 
   # 本地运行
   sh ./${SCRIPT_NAME}.sh install

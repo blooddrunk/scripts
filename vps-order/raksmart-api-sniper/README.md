@@ -66,7 +66,7 @@ node raksmart-api-sniper.mjs --config ./config.json
 按 5–8 秒间隔轮询确认，最多 8 次；始终无法确认时保留购物车并提示
 人工核对订单列表，绝不自动重跑（防止重复下单）。
 
-## 与 Tampermonkey 版（`../raksmart-auto-order/`）的关系
+## 与 Tampermonkey 版（`../../tampermonkey/raksmart-auto-order/`）的关系
 
 | | 本脚本（Node） | Tampermonkey v2 |
 |---|---|---|

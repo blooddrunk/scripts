@@ -80,13 +80,13 @@ REJECT（阻止绕过路由器 DNS）
 **方式一：管道执行（不落地文件）**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/blooddrunk/openwrt-dns-daed/main/openwrt-dns-daed.sh | sh -s -- install
+curl -fsSL https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/openwrt-dns-daed/openwrt-dns-daed.sh | sh -s -- install
 ```
 
 **方式二：先下载再执行（推荐，便于重跑与排障）**
 
 ```sh
-wget -O /tmp/odd.sh https://raw.githubusercontent.com/blooddrunk/openwrt-dns-daed/main/openwrt-dns-daed.sh
+wget -O /tmp/odd.sh https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/openwrt-dns-daed/openwrt-dns-daed.sh
 sh /tmp/odd.sh install
 ```
 
@@ -577,7 +577,7 @@ sh /root/openwrt-dns-daed/openwrt-dns-daed.sh check
 
 ```sh
 # 方式一：重新执行在线一键安装命令（始终拉最新脚本）
-curl -fsSL https://raw.githubusercontent.com/blooddrunk/openwrt-dns-daed/main/openwrt-dns-daed.sh | sh -s -- install
+curl -fsSL https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/openwrt-dns-daed/openwrt-dns-daed.sh | sh -s -- install
 
 # 方式二：脚本内置自更新地址，直接运行即可（fork 仓库请在配置文件中覆盖 SCRIPT_SELFUPDATE_URL）
 sh /root/openwrt-dns-daed/openwrt-dns-daed.sh update
