@@ -42,7 +42,11 @@
  *   }
  *
  * Match fields:
- *   host, hostRegex, name, nameRegex, subName, subNameRegex
+ *   host, hostRegex, sni, sniRegex, name, nameRegex, subName, subNameRegex
+ *
+ * `sni` matches the node's TLS SNI (vless/reality, hysteria2, trojan...).
+ * It is the only hostname left on nodes whose `server` is a bare IP with the
+ * domain carried in SNI only (e.g. reality inbounds announced by IP).
  *
  * Set fields:
  *   provider, route, traffic, region, city, asn, profile
@@ -70,6 +74,8 @@ const options = { ...scriptArgs, ...requestOptions };
 const MATCH_FIELDS = Object.freeze([
   'host',
   'hostRegex',
+  'sni',
+  'sniRegex',
   'name',
   'nameRegex',
   'subName',
@@ -187,6 +193,11 @@ function getSubName(proxy) {
 
 function getName(proxy) {
   return String(proxy?.name ?? '').trim();
+}
+
+function getSni(proxy) {
+  // Clash-style proxies spell it `sni`; some generators use `servername`.
+  return String(proxy?.sni ?? proxy?.servername ?? '').trim();
 }
 
 function normalizeRule(rule, index, source) {
@@ -379,6 +390,8 @@ function ruleMatches(proxy, rule) {
   return (
     matchString(stableHost, match.host, normalizeHost) &&
     matchRegex(stableHost, match.hostRegex) &&
+    matchString(getSni(proxy), match.sni) &&
+    matchRegex(getSni(proxy), match.sniRegex) &&
     matchString(getName(proxy), match.name) &&
     matchRegex(getName(proxy), match.nameRegex) &&
     matchString(getSubName(proxy), match.subName) &&

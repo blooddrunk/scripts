@@ -209,6 +209,7 @@ https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/substore-opera
 | --- | --- |
 | `host` | 原始 `server` 域名。**推荐**：来自 `_originServer`，DNS 解析后依然可用 |
 | `hostRegex` | 域名正则 |
+| `sni` / `sniRegex` | 节点 TLS SNI / SNI 正则。入站以**裸 IP** 作连接地址、域名只在 SNI 里时（如 IP 直连的 Reality 入站），`host` 匹配不到，改用这里 |
 | `name` / `nameRegex` | 节点名 / 节点名正则 |
 | `subName` / `subNameRegex` | 订阅名 / 订阅名正则 |
 
@@ -462,7 +463,7 @@ daed 单次尝试硬编码 5 秒超时且不可配置。按 [VPS 生产部署](#
 
 按概率排查：
 
-1. **规则没匹配上**：`match.host` 与订阅里节点的 `server` 域名不一致（匹配不区分大小写，但拼写必须一致）。
+1. **规则没匹配上**：`match.host` 与订阅里节点的 `server` 域名不一致（匹配不区分大小写，但拼写必须一致）。节点以**裸 IP** 作连接地址时没有 `_originServer`，`host` 永远匹配不到——若域名在 SNI 里，改用 `match.sni` / `sniRegex` 规则（2026-11-18 的 443 Reality 节点即此情形：连接地址是公网 IPv4、域名只在 SNI，导致 `profile` 为空被整批过滤）。
 2. **操作顺序错误**：① 没放在 ②（DNS 解析）之前，`server` 已变成 IP 且没有 `_originServer`，host 匹配失效。
 3. **过滤条件过严**：不同过滤字段之间是 AND 关系。
 
