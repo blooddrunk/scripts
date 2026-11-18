@@ -28,6 +28,7 @@ scripts/
 | [homelab/headscale-openwrt-bootstrap](homelab/headscale-openwrt-bootstrap/) | 自建 Headscale（Tailscale 控制面）部署 + OpenWrt 路由器接入，事务式可回滚 | Debian/Ubuntu VPS + OpenWrt 路由器（POSIX sh） | `headscale-vps.sh` / `tailscale-openwrt.sh` |
 | [homelab/openwrt-dns-daed](homelab/openwrt-dns-daed/) | OpenWrt 防 DNS 劫持一键加固（dnsmasq + DoH），并生成 daed 分流配置片段 | OpenWrt 24.10+（busybox ash） | `openwrt-dns-daed.sh` |
 | [homelab/substore-operators](homelab/substore-operators/) | Sub-Store 远程 Operator 脚本管线（协议过滤→档案分池→Google 送中探测）+ VPS 缓存保热部署 | Sub-Store 后端（Node Docker，含 HTTP META） | `operators/*.js` + `configs/keepwarm.sh` |
+| [homelab/vps-proxy-rollout](homelab/vps-proxy-rollout/) | VPS 上的 Reality、Hysteria 2 与现有站点分批迁移 | Debian VPS、1Panel、3x-ui 与 OpenWrt 客户端 | `README.md` |
 | [vps-order/lightlayer](vps-order/lightlayer/) | LightLayer 特价 VPS 下单/守候 CLI（试算、下单、并发守候、防超订） | 本地终端，Python 3 纯标准库 | `lightlayer.py` |
 | [vps-order/raksmart-api-sniper](vps-order/raksmart-api-sniper/) | Raksmart 特价 VPS 抢购 CLI（OAuth 四跳登录、时钟校准、并行下单），含完整接口逆向文档 | 任意 Node ≥ 18 机器（建议低延迟 VPS），零依赖 | `raksmart-api-sniper.mjs` |
 | [tampermonkey/web-ux-freedom](tampermonkey/web-ux-freedom/) | 解除网站前端体验限制（切屏检测、强制全屏、禁复制、反反调试等），按站点可开关 | 浏览器 + Tampermonkey | `web-ux-freedom.user.js` |
