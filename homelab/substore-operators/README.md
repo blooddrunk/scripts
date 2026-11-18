@@ -246,7 +246,7 @@ backup   普通线路、备用
 | `rulesUrl` | — | 规则文件地址（别名 `rules_url`），返回 JSON 数组或 `{"rules": [...]}`。需 URL 编码后拼接。**获取失败时脚本直接报错**，不会用空规则静默生成订阅；`rulesCacheTtl` 内有旧缓存时降级使用 stale 缓存并记录日志 |
 | `rules` | — | 内联规则 JSON 数组（同样 URL 编码），适合少量规则的排查或临时覆盖 |
 | `rulesTimeout` | `10000` | 拉取 `rulesUrl` 的超时（毫秒） |
-| `rulesCacheTtl` | `900000` | 远程规则缓存时长（毫秒，默认 15 分钟），`0` 关闭缓存 |
+| `rulesCacheTtl` | `900000` | 远程规则缓存时长（毫秒，默认 15 分钟），`0` 关闭缓存。注意 `0` **同时跳过回写**：用它绕过旧缓存后，存储里的旧规则不会更新，默认参数的后续生产仍会读到旧值。改完规则想立即全链路生效：先用 `rulesCacheTtl=1`（强制过期但回写）请求一次刷新 ③ 的缓存，再 `keepwarm.sh purge-cache && keepwarm.sh run` 换新反代缓存 |
 | `profile` / `route` / `traffic` / `region` / `city` / `provider` / `asn` / `host` | 空 | 过滤条件，见下 |
 | `metadata` | `false` | `true` 时在输出节点上保留 `_nodeProfile` 画像字段，用于排查 |
 | `mmdb_country_path` / `mmdb_asn_path` | — | MMDB 数据库路径，也可用环境变量，见下 |
