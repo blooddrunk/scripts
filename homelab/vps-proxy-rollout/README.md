@@ -4,9 +4,9 @@
 
 ## 2026-11-18 上线记录
 
-四台按 `lightlayer`、`bitsflow`、`nosla`、`raksmart` 的顺序完成服务端迁移。Xray 均为 `26.11.9`，新 Reality 在公网 IPv4 TCP 443，旧 Reality 继续提供服务。独立 VPS 实测新 Reality 和固定端口 Hysteria 2 均能返回对应 VPS 的公网 IPv4，现有 HTTPS 站点的响应状态和 ALPN 保持原基线。`lightlayer` 使用 Debian nginx，另三台沿用 1Panel OpenResty。回落端口是 `127.0.0.1:8443`。
+四台按 `lightlayer`、`bitsflow`、`nosla`、`raksmart` 的顺序完成服务端迁移。Xray 均为 `26.11.9`，Reality 在公网 IPv4 TCP 443。独立 VPS 实测 Reality 和固定端口 Hysteria 2 均能返回对应 VPS 的公网 IPv4，现有 HTTPS 站点的响应状态和 ALPN 保持原基线。`lightlayer` 使用 Debian nginx，另三台沿用 1Panel OpenResty。回落端口是 `127.0.0.1:8443`。
 
-| SSH profile | 旧 Reality TCP | Hysteria 2 固定端口 | 跳跃范围 |
+| SSH profile | 已删除的旧 Reality TCP | Hysteria 2 固定端口 | 跳跃范围 |
 | --- | ---: | ---: | ---: |
 | `lightlayer` | `<reality-port>` | `<hy2-port>` | `<hop-range>/udp` |
 | `bitsflow` | `<reality-port>` | `<hy2-port>`（兼容原 `<old-hy2-port>`） | `<hop-range>/udp` |
@@ -14,10 +14,16 @@
 | `raksmart` | `<reality-port>` | `<hy2-port>` | `<hop-range>/udp` |
 
 - 3x-ui 绑定回环。3x-ui 和三台 1Panel 的原生管理端口均有 IPv4/IPv6 防火墙规则拒绝非回环访问。现有 1Panel 的 HTTPS 反代继续工作，`<sub-port>` HTTPS 订阅继续对原客户端开放。
-- 路由保留原 API、私网、BT 规则。两台 daed 的 `PROXY_CN_DOMAINS` 现有域名后缀允许代理访问；`223.5.5.5` 只放行 UDP 53 供现有 daed 检测使用。其余代理流量按 `geosite:cn`、`geoip:cn` 匹配阻断。LightLayer 已实测国内例外站点有 HTTP 响应，普通大陆域名和 IP 主动测试失败。Reality 现有的显式最低版本未调整。
+- 路由保留原 API、私网、BT 规则。两台 daed 的 `PROXY_CN_DOMAINS` 现有域名后缀允许代理访问；`223.5.5.5` 只放行 UDP 53 供现有 daed 检测使用。出口代理流量原按 `geosite:cn`、`geoip:cn` 匹配阻断，其中域名级 `geosite:cn` 阻断已于 2026-11-18 移除（见下文「geosite:cn 阻断误伤与移除」），`geoip:cn` IP 级阻断与 BT、私网规则保留。LightLayer 已实测国内例外站点有 HTTP 响应，普通大陆域名和 IP 主动测试失败。Reality 现有的显式最低版本未调整。
 - `bitsflow` 在带 WAL 的数据库复核中已是 `<hy2-port>`，实际偏差在持久化 NAT 和客户端旧入口。现在两族跳跃都转到 `<hy2-port>`，旧 `<old-hy2-port>` 也转到 `<hy2-port>`。固定端口、旧端口和两个跳跃样本均已实测。
 - `lightlayer` 的 Hysteria 2 使用 Salamander。初次只读探测未包含该参数，修正后从独立 VPS 验证了固定端口。从独立 VPS 对四台分别跑了四次跨周期的 Hysteria 2 请求，每台观测到至少四个不同的目标 UDP 端口，请求均返回各自 VPS 的 IPv4。
-- 两个 Headscale 站点的 `/health` 和 `/derp/probe` 均正常。Raksmart 的九个 Sub-Store 保热下载均返回 HTTP 200。四台 3x-ui 源订阅都已包含新 443 节点和原有节点；检查时所测 Sub-Store 聚合输出尚未检出新节点（后查为 443 节点按本设计以裸 IPv4 作连接地址、域名仅在 SNI，节点档案规则按域名 host 匹配不到、`profile` 为空被过滤；已为 `node-profile-filter.js` 增加 `sni` 匹配并在规则文件补 443 条目，见 [substore-operators](../substore-operators/README.md)）。
+- 两个 Headscale 站点的 `/health` 和 `/derp/probe` 均正常。Raksmart 的九个 Sub-Store 保热下载均返回 HTTP 200。初次验收时，四台 3x-ui 源订阅同时包含新 443 节点和旧节点；当时所测 Sub-Store 聚合输出尚未检出新节点（后查为 443 节点按本设计以裸 IPv4 作连接地址、域名仅在 SNI，节点档案规则按域名 host 匹配不到、`profile` 为空被过滤；已为 `node-profile-filter.js` 增加 `sni` 匹配并在规则文件补 443 条目，见 [substore-operators](../substore-operators/README.md)）。
+
+### 非 443 Reality 退役
+
+用户确认客户端已配置负载均衡或故障转移后，逐台备份 3x-ui 数据库并删除表中的旧入站。外网复测四个旧端口均已关闭。四台源订阅中的 Reality 都只剩 TCP 443，并继续提供 Hysteria 2。退役后复测了两种协议的 IPv4 出口、现有 HTTPS 站点和 Windows 本地面板登录页。客户端缓存按各自的订阅刷新周期更新。
+
+退役备份位于各 VPS 的 `/root/vps-proxy-rollout-20261118/retire-<reality-port>-<时间戳>/`。即时回退可在对应 VPS 执行 `python3 /root/vps-proxy-rollout-20261118/retire.py <profile> rollback <时间戳>`。回退会还原该次退役前的 3x-ui 数据库，操作前保存之后新增的面板设置与统计。
 
 ### 客户端验收
 
@@ -32,11 +38,36 @@ Windows 使用 v2rayN `7.25.6` 自带的 Xray `26.11.9` 独立测试。若 Windo
 
 两台 daed 已更新正在使用的入口规则，并直接导入了四个新节点。Headscale 域名分流优先于共享 IP 的 TCP 443 直连，两台本机 DNS 均通过验证。原订阅刷新在其中一台 daed 路由器成功 4 项，另一台成功 2 项、失败 2 项。直接导入的节点需要在对应客户端中选用。Android 的 v2rayNG 实机连通性待设备上线后验收。
 
+### lightlayer Reality 443 超时根因
+
+验收表中 `lightlayer` 的 Reality TCP 443 超时已定位：不是服务端或 Reality 配置问题，而是 CN 直连该机公网 IPv4 的 TCP 包在途中被静默丢弃（GFW 针对该 IP 的入站 TCP 阻断，或 LightLayer 上游 Zillion Network 的 CN 方向过滤；两者在客户端均表现为超时）。换端口无效——只读基线中该机旧 Reality 端口同样超时，阻断早于本次迁移就存在。Hysteria 2 为 UDP 且在别的端口，不受此影响。
+
+诊断证据：
+
+- 服务端 Xray 正常监听公网 IPv4 TCP 443，INPUT 链 policy ACCEPT、无 443 drop，nft 亦显式放行；raksmart、nosla、bitsflow 直连该 IP 的 443 均秒通。
+- lightlayer 本机 tcpdump 期间，客户端网络发起的 443 探测零个 SYN 到达，包死于半路。
+- 四台 `geoip.dat` 为同版本，该 IP 所在 /25 段归 SC 而非 CN（对照 `223.5.5.5` 正确归 CN），出口节点 `geoip:cn` 阻断规则不命中，排除自家路由误杀。
+- 路由器与客户端为节点加的「精确 IPv4 + 协议 + 端口」直连规则把该节点的连接定向到 CN 直连路径，恰好是被丢弃的路径；另三台直连正常，故仅此台失败。
+
+诊断坑：客户端本机 `connect()` 结果不可信——路由器 TPROXY 或本地 TUN 会对不带数据的连接代答握手（0.00s 即假握手，未监听的随机端口也会显示「OPEN」），必须以服务端 tcpdump 交叉验证；`$SSH_CLIENT` 可确认链路真实出口。
+
+处置：优先向 LightLayer 工单更换 IP；短期该机按 Hysteria 2 单协议使用，Reality 443 节点保留给海外或经前置节点链式的场景（各 VPS 直连均通）；不建议换端口。区分 GFW 与机房过滤，可从另一 CN 网络（如手机热点）直连 tcping 443 与 22 对照。
+
+### bitsflow Hysteria 2 超时根因
+
+验收表中 `bitsflow` 的 Hysteria 2 失败已定位：节点本身没有任何问题——服务器配置、证书、订阅、密码全部正确，从 raksmart 用完全相同的 Xray `26.11.9` 内核（以及 sing-box）实测都能正常代理，出口 IP 就是 bitsflow。根因是客户端所在移动线路的国际回程丢弃了服务器发回的 QUIC 握手包：抓包显示客户端的 Initial 每次都到达服务器、服务器每次都回复完整握手包，但客户端始终在重传 Initial（说明回复没有到达客户端），v2rayN 时延测试因此显示 `-1 ms`。移动出口对 UDP 的 QoS 丢包很常见，换端口解决不了；Reality 走 TCP 不受影响。验收时跳跃范围两端端口在 Windows 可用，与 QoS 丢包的时变与端口相关性一致，不代表换端口可根治。
+
+### geosite:cn 阻断误伤与移除
+
+出口的域名级 `geosite:cn → blocked` 规则接连误伤非大陆目标：v2rayNG 批量真连接测试全 `-1 ms`（默认测试 URL `www.gstatic.com/generate_204` 被归入 geosite:cn，请求在出口被掐）、Google Fonts 与 reCAPTCHA 静默失效（`fonts.gstatic.com`、`fonts.googleapis.com`、`www.recaptcha.net`）、长桥与富途断连（`longbridgeapp.com`、`moomoo.com` 被归入 cn，v2fly 的 cn＝「所有与中国相关」而非「实名敏感」）。桌面 v2rayN 预置测试 URL 为 `www.google.com/generate_204` 等不含 gstatic，故未受影响。诊断方法：在各 VPS 本地以 socks 入站伪造 `in-vps-proxy-443-tcp` 标签复刻生产路由跑单规则变体，Xray access 日志可见 `[in-vps-proxy-443-tcp -> blocked]`；手写 protobuf 解析 geosite.dat 条目不可靠（条目数为 0），以 Xray 实测匹配为准。
+
+经确认后已在四台移除该条规则（`xrayTemplateConfig` 中 `domain==["geosite:cn"]` 的一条，7→6 条），`geoip:cn` IP 级阻断保留兜底（实测 `114.114.114.114:53` 仍被拦，CN 解析域名经 IPOnDemand 同样受控）。移除后四台实测 gstatic/moomoo/longbridgeapp 均恢复，v2rayNG 批量真连接不再需要改测试 URL。改动备份在各 VPS `/root/vps-proxy-rollout-20261118/route-fix-geositecn-<时间戳>/`（含改动前 3x-ui 数据库一致性备份）。操作注意：重启 raksmart 的 x-ui 会切断以 raksmart 为出口的本地代理链及经该链的 SSH 会话，属预期自伤，等 x-ui 拉起后重连即可。
+
 ### Windows 访问 3x-ui
 
 在这台电脑双击桌面的 **3x-ui 面板** 快捷方式。它使用 WSL `Ubuntu` 的四个 SSH profile 建立回环转发，并在独立 Edge 配置中打开四个登录页。浏览器保留原证书域名与端口，登录仍使用原有账号。重启电脑或 WSL 后，双击快捷方式即可重建转发。普通浏览器窗口仍使用公网解析，因此请从快捷方式打开面板。
 
-四个登录页已通过 Windows 本地转发和 HTTPS 证书校验。转发脚本位于 WSL 的 `~/.local/bin/vps-3xui-tunnels`，启动脚本和私有登录地址保存在 Windows 的 `%LOCALAPPDATA%\VPS-3xUI`。这条管理通路只依赖 SSH，适用于公网 443 超时的 LightLayer。
+四个登录页已通过 Windows 本地转发和 HTTPS 证书校验。转发脚本位于 WSL 的 `~/.local/bin/vps-3xui-tunnels`，启动脚本和私有登录地址保存在 Windows 的 `%LOCALAPPDATA%\VPS-3xUI`。这条管理通路只依赖 SSH，适用于公网 443 超时的 LightLayer（根因见上文「lightlayer Reality 443 超时根因」）。
 
 备份、阶段日志和恢复工具在各 VPS 的 `/root/vps-proxy-rollout-20261118/`，包含敏感配置。`acme.sh` 的原有续签钩子仍刷新 Xray 证书，并调用 `/usr/local/sbin/vps-proxy-origin-renew` 更新 nginx/OpenResty 的本机站点证书镜像。已用当前正式证书演练站点 reload。保留该目录供续签和恢复使用。
 
