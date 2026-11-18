@@ -61,7 +61,7 @@ Windows 使用 v2rayN `7.25.6` 自带的 Xray `26.11.9` 独立测试。若 Windo
 
 出口的域名级 `geosite:cn → blocked` 规则接连误伤非大陆目标：v2rayNG 批量真连接测试全 `-1 ms`（默认测试 URL `www.gstatic.com/generate_204` 被归入 geosite:cn，请求在出口被掐）、Google Fonts 与 reCAPTCHA 静默失效（`fonts.gstatic.com`、`fonts.googleapis.com`、`www.recaptcha.net`）、长桥与富途断连（`longbridgeapp.com`、`moomoo.com` 被归入 cn，v2fly 的 cn＝「所有与中国相关」而非「实名敏感」）。桌面 v2rayN 预置测试 URL 为 `www.google.com/generate_204` 等不含 gstatic，故未受影响。诊断方法：在各 VPS 本地以 socks 入站伪造 `in-vps-proxy-443-tcp` 标签复刻生产路由跑单规则变体，Xray access 日志可见 `[in-vps-proxy-443-tcp -> blocked]`；手写 protobuf 解析 geosite.dat 条目不可靠（条目数为 0），以 Xray 实测匹配为准。
 
-经确认后已在四台移除该条规则（`xrayTemplateConfig` 中 `domain==["geosite:cn"]` 的一条，7→6 条），`geoip:cn` IP 级阻断保留兜底（实测 `114.114.114.114:53` 仍被拦，CN 解析域名经 IPOnDemand 同样受控）。移除后四台实测 gstatic/moomoo/longbridgeapp 均恢复，v2rayNG 批量真连接不再需要改测试 URL。改动备份在各 VPS `/root/vps-proxy-rollout-20261118/route-fix-geositecn-<时间戳>/`（含改动前 3x-ui 数据库一致性备份）。操作注意：重启 raksmart 的 x-ui 会切断以 raksmart 为出口的本地代理链及经该链的 SSH 会话，属预期自伤，等 x-ui 拉起后重连即可。
+经确认后已在四台移除该条规则（`xrayTemplateConfig` 中 `domain==["geosite:cn"]` 的一条，7→6 条），`geoip:cn` IP 级阻断保留兜底（实测 `114.114.114.114:53` 仍被拦，CN 解析域名经 IPOnDemand 同样受控）。移除后四台实测 gstatic/moomoo/longbridgeapp 均恢复，v2rayNG 批量真连接不再需要改测试 URL。改动备份在各 VPS `/root/vps-proxy-rollout-20261118/route-fix-geositecn-<时间戳>/`（含改动前 3x-ui 数据库一致性备份）。操作注意：重启 raksmart 的 x-ui 会切断以 raksmart 为出口的本地代理链及经该链的全部 SSH 会话——包括本机四条 3x-ui 面板隧道（`ssh -fNT` master 不自动重连，本地转发端口会全部消失，面板表现为「无法访问」，但面板端口与进程本身不受影响），等 x-ui 拉起后重跑 `~/.local/bin/vps-3xui-tunnels`（或双击桌面「3x-ui 面板」快捷方式）即可重建。
 
 ### Windows 访问 3x-ui
 
