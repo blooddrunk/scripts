@@ -15,9 +15,42 @@
 | 3x-ui 与 Xray | 记录实际运行版本、服务单元、面板 TLS 与绑定、订阅监听、启用的入站、协议、流控、目标、SNI 和出口规则。SQLite 读取要包含 WAL。对照持久化模板、运行配置和实际套接字。检查旧 UDP 端口是否仍在订阅或 NAT 中 |
 | 客户端 | 列出 v2rayN、v2rayNG、daed、Passwall2 等实际内核版本、订阅链、在用分组、直连例外及备用节点。分别从日常网络和独立网络实测现有代理的 HTTPS 与 IPv4 出口。记录原有故障，作为切换后的对照 |
 
-基线至少列出计划占用的端口、要迁移的站点、每个真实测试的来源和预期结果。缺少 3x-ui 或 Web 服务时，按官方说明部署适用架构的稳定版本，先在非冲突端口验证服务。没有 1Panel 的主机可直接用 nginx。迁移前保留旧入站或至少一个已测通的跨 VPS 节点。 [3x-ui](https://github.com/MHSanaei/3x-ui) · [Xray 发布页](https://github.com/XTLS/Xray-core/releases) · [nginx 安装说明](https://nginx.org/en/linux_packages.html)
+基线至少列出计划占用的端口、要迁移的站点、每个真实测试的来源和预期结果。已有业务的主机要保留旧入站或至少一个已测通的跨 VPS 节点。空白机记录将使用的公网 IPv4、域名和端口，并按下一节准备服务。
 
-在 root 专用目录做变更前快照。用 SQLite Backup API 或 `.backup` 保存一致的 3x-ui 数据库并做完整性检查，同时保存生效的模板和配置、Xray 二进制和 Geo 数据、Web 配置及挂载、续签钩子、防火墙和路由器或订阅配置。记录每项的恢复路径和重启顺序。新环境按本节准备备份和恢复操作，现有实例的专用脚本见文末。
+在 root 专用目录备份已有配置。用 SQLite Backup API 或 `.backup` 保存一致的 3x-ui 数据库并做完整性检查，同时保存生效的模板和配置、Xray 二进制和 Geo 数据、Web 配置及挂载、续签钩子、防火墙和路由器或订阅配置。记录每项的恢复路径和重启顺序。空白机完成安装和基本验证后做第一份配置基线。现有实例的专用脚本见文末。
+
+### 空白 VPS 安装和准备
+
+1. 先确认 SSH 或供应商控制台可用。给节点域名做指向该 VPS 的直连 A 记录，准备节点域名和面板域名所需的可信 TLS 证书。节点域名可以复用于 Web 后端和 Hysteria 2，面板也可使用同一份覆盖该域名的证书。已有 ACME 流程可以复用。用 DNS-01 可避免占用 TCP 80，使用 HTTP-01 时先确认校验能到达现有 Web 服务或 ACME 监听。
+2. 在云防火墙或主机防火墙保持 SSH 可达，并限制面板管理端口的公网访问。选择与客户端兼容的 3x-ui 正式版。下面以现网用过的版本为例，先下载并审阅官方安装脚本，再执行。安装提示中选择未占用的管理端口，保存生成的账号和私有登录路径。已有证书时可选自定义证书路径。 [3x-ui 安装说明与发布包校验](https://github.com/MHSanaei/3x-ui/tree/v3.11.0)
+
+   ```bash
+   version=v3.11.0
+   installer=$(mktemp)
+   curl -fsSL "https://raw.githubusercontent.com/MHSanaei/3x-ui/$version/install.sh" -o "$installer"
+   less "$installer"
+   sudo bash "$installer" "$version"
+   ```
+
+3. 用 `systemctl is-active x-ui` 检查服务。先经 SSH 隧道进入面板，再按第 2 节收口管理监听和验收。面板负责保存入站，Xray 由 3x-ui 管理。记录内核版本、证书路径和续签重载方式。
+4. 安装 Web 服务。Debian 空白机可用 `sudo apt install nginx`，将下面的站点片段放到 `/etc/nginx/conf.d/reality-origin.conf`，确认主配置在 `http` 中包含该目录。替换域名、证书路径并确认安装包提供 HTTP/2 模块。运行 `sudo nginx -t && sudo systemctl reload nginx`，再用第 3 节的 TLS 测试确认回环目标。已有 1Panel 的主机按第 3 节继续使用原来管理的 OpenResty。 [nginx 安装说明](https://nginx.org/en/linux_packages.html)
+
+```nginx
+server {
+    listen 127.0.0.1:8443 ssl;
+    server_name vpn.example.com;
+    ssl_certificate /path/to/fullchain.pem;
+    ssl_certificate_key /path/to/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    http2 on;
+    location / {
+        default_type text/plain;
+        return 200 "Service online\n";
+    }
+}
+```
+
+`http2 on;` 适用于 nginx 1.25.1 及以上。较早版本在对应的 `listen` 上加 `http2`。TLS 后端验证完成后，按[入站字段对照](#新建-reality-和-hysteria-2-入站)创建节点。若公网 TCP 443 空闲，可直接让首个 Reality 入站使用这个端口。未部署旧节点的主机跳过旧入站退役。
 
 ## 2. 建立管理通路
 
@@ -73,7 +106,7 @@ $chromeArgs = @(
 1. 在 `127.0.0.1:8443` 或经确认的备用回环端口并行建立 TLS 后端。host 模式下在 Web 服务的所有现有 IPv4 HTTPS 站点与默认站点中配置对应的回环监听。bridge 模式下可映射宿主机回环到容器 TLS 端口。从 Xray 所在的网络命名空间验证可达性。不开公网后端端口。用新增站点验证拟用 Reality 域名。
 2. Web 站点保留证书、TLS 版本、ALPN、SNI、HTTP 跳转、WebSocket/Upgrade 和反代。80 上需要 HTTPS 的站点按协议跳转，并保留 ACME 校验。反代使用客户端看到的 HTTPS 端口 443，例如对应的 `X-Forwarded-Port`，避免把回落端口写入跳转或请求头。原有 IPv6 监听和 UDP 443 单独处理。若站点依赖真实来源 IP，先解决接入路径与受信头部。`xver=0` 时到达 Web 服务的来源通常是回环。采用 PROXY protocol 时，发送端和回落监听必须一起配置，并单独验收。
 3. 校验拟用 Xray 版本及发布包摘要，在暂存配置上运行 `xray run -test -c "$STAGED_CONFIG"`。通过当前版本支持的 3x-ui 接口或面板写入持久化配置，用生成的运行配置确认变更。先准备 VLESS/TCP 测试入站，安全传输选 Reality，流控选 `xtls-rprx-vision`，`target` 指向回环 TLS 后端，`serverNames` 填候选域名。新入站生成自己的 UUID、Reality 密钥对与 Short ID，客户端使用对应公钥和 Short ID。保留已有最低版本限制与强制握手行为，用实际客户端内核与指纹验证兼容性。
-4. 对照已有规则，只在设计范围内修改代理出口。保留本地 API、私网和 BT 处理。按确认的域名后缀配置直连例外，健康检查例外限制到确切 IP、协议和端口。后面的 `geoip:cn` 阻断按出口 IP 匹配。若采用 `IPOnDemand`，同时测直接 IP、待解析域名及 DNS。整类域名 `geosite:cn` 曾误拦正常应用与移动端连通性测试，当前配置采用 IP 规则和已确认的例外。 [daed 分流顺序](../openwrt-dns-daed/docs/principles.md)
+4. 先保留 3x-ui 的本地 API 规则和适用的私网保护，再逐项决定 BT、地区 IP 策略和健康检查例外。根据客户端实际分流选择策略，空白机的基本节点无需导入既有办公域名列表。采用 `IPOnDemand` 时，用直接 IP 和待解析域名分别做允许、拒绝与 DNS 测试。 [3x-ui 路由说明](ROUTING.md)
 
 用本地 TLS 测试和普通 HTTPS 请求核对每个站点。临时测试入站使用非冲突端口，验证实际认证和多个 SNI 回落后，由变更窗口接管正式端口。
 
@@ -88,7 +121,20 @@ curl --noproxy '*' --max-time 8 -sS -o /dev/null \
 
 ## 4. 切换 TCP 443 并配置 UDP
 
-1. 确认测试通过后，验证 Web 配置语法并 reload，释放公网 IPv4 的 TCP 443。以 `ss -4 -lnt` 核对 TCP，再用 `ss -6 -lnt` 与 `ss -lnu` 核对原 IPv6/UDP 分工。将 Reality 入站绑定到指定的公网 IPv4 和 TCP 443，保留回环 TLS 目标。核对每个旧站点及 HTTPS 重定向。检查 1Panel 保存、重载或更新时是否会重新占用 443。
+### 新建 Reality 和 Hysteria 2 入站
+
+在 3x-ui 的入站列表分别新增两个入站，并各添加一个客户端。下表用于核对字段。面板不同版本的字段名可能有差异，以生成的 Xray 配置和实际监听为准。
+
+| 项目 | 常见独立节点 | 本教程的配置 |
+| --- | --- | --- |
+| Reality 协议与认证 | VLESS、TCP、Reality，客户端使用 UUID、公钥、Short ID 和兼容的指纹。使用 Vision 时两端流控一致 | 仍用这些字段。服务端创建 UUID、密钥对和 Short ID，流控选 `xtls-rprx-vision`。服务端保管私钥，客户端填写对应公钥 |
+| Reality 监听和 TLS 目标 | 可选择一个空闲 TCP 端口及独立的 TLS 目标。目标常为另一站点 | 绑定 VPS 的公网 IPv4 TCP 443，`target` 填 `127.0.0.1:8443`，`serverNames` 填自己站点的主机名。客户端连接 IPv4，SNI 填同一主机名。普通 HTTPS 经过该本机后端，所以要一并验收网站 |
+| Hysteria 2 与证书 | 独立 UDP 监听，Hysteria v2，客户端使用认证密码与 TLS SNI | 保持标准 Hysteria 2 字段。协议选择 Hysteria v2，选择未占用的固定 UDP 端口，使用节点域名的可信证书及私钥，为客户端设置独立认证密码。客户端填 VPS IPv4、固定端口及证书域名 SNI，并启用证书校验 |
+| Hysteria 2 跳跃与混淆 | 固定端口可以直接使用，也可选用跳跃或 Salamander | 先验证固定端口。需要跳跃时再配置 UDP 转发和客户端范围。若启用 Salamander，两端使用相同参数。与 Reality 共用 VPS 和出网策略，TLS 及 UDP 监听各自独立 |
+
+### 正式监听、跳跃与续签
+
+1. 若 Web 服务已占用公网 IPv4 TCP 443，验证回环站点配置后 reload，释放原监听。空白机先用 `ss -4 -lnt` 确认端口空闲，已有网站的主机同时用 `ss -6 -lnt` 和 `ss -lnu` 核对原 IPv6/UDP 分工。将 Reality 入站绑定到指定的公网 IPv4 TCP 443，保留回环 TLS 目标。核对新站点及每个旧站点的 HTTPS 响应。检查 1Panel 保存、重载或更新时是否会重新占用 443。
 2. 优先复用现有 Hysteria 2。新环境创建独立 UDP 入站，配置 v2 协议、可验证的 TLS 证书和独立认证。启用 Salamander 时，服务端与各客户端参数保持一致。先发布能正常连通的固定端口，核对数据库、真实监听、源订阅和防火墙。旧主端口仍有人使用时，可按实际情况保留限于该端口的兼容转发。
 3. 需要跳跃时，通过现有防火墙将专用 UDP 范围转发到该固定监听端口，并保存到现有持久化机制中。确认端口范围、跳跃配置、固定端口和 SNI 在源订阅与转换后的客户端配置中一致。仅在部署使用 IPv6 时同步验证 IPv6 UDP。先测固定端口，再抽样范围两端和中间，最后运行跨多个跳跃周期的请求。检查服务端目标端口和实际返回的 IPv4。 [Hysteria 2 端口跳跃](https://v2.hysteria.network/docs/advanced/Port-Hopping/)
 4. 把证书加载纳入续签流程。确认 Web 服务与 Hysteria 2 使用的证书来源、挂载或镜像路径。私钥只供必要服务读取。使用现有正式证书演练 reload，并确认替换证书后的新进程仍提供预期证书。复测同一公网 443 上的所有站点。
