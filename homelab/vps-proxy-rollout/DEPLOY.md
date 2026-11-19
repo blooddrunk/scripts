@@ -21,28 +21,52 @@
 
 ## 2. 建立管理通路
 
-1. 确认原生 3x-ui 的管理端口、证书域名与登录路径。先从独立管理路径建立 SSH 转发，并实际打开登录页。手动方式见项目首页。复测已存在的 1Panel HTTPS 反代。
+1. 确认原生 3x-ui 的管理端口、证书域名与登录路径。先从独立管理路径建立 SSH 转发，并实际打开登录页。 [SSH 转发命令与参数](README.md#换电脑后手动连接)
 2. 把 3x-ui 管理端口绑定到 `127.0.0.1`。1Panel 按反代需求绑定回环，或用原有防火墙限制原生管理端口的非回环访问。仅修改对应端口的 IPv4/IPv6 规则及其持久化配置，保留 SSH、Docker 和其他服务的规则。
-3. 从外部复测原生管理端口关闭。从 SSH 转发复测登录，明确 HTTPS 订阅仍可下载。重启 x-ui 后再验收一遍。SSH 若经正在维护的 VPS 出口转发，重启它会断开该路径上的多个面板隧道。先换出口，恢复后再重建转发。
+3. 从外部复测原生管理端口关闭。从 SSH 转发复测登录，并检查现有 1Panel HTTPS 反代和 HTTPS 订阅。重启 x-ui 后再验收一遍。SSH 若经正在维护的 VPS 出口转发，重启它可能断开该路径上的多个面板隧道。先换出口，恢复后再重建转发。
 
-**浏览器接入示例。** 在客户端已建立 SSH 转发时，可以用 Chromium 系浏览器启动独立配置，将证书域名解析到本地。把保留域名 `panel.example.com`、示例端口和路径替换成私有部署值。创建桌面快捷方式时，让它先启动或重建 SSH 转发，再使用这组浏览器参数。新电脑要先验证原生 Windows 或 WSL 到本机回环转发是否可达。
+### 先用终端验证隧道和 HTTPS
+
+保持 `ssh -L` 运行，在客户端另开终端测试。这里的 `28443` 是 SSH 命令左侧的本地端口。`--resolve` 让这一次请求连接本机，同时保留 URL 里的证书域名。把示例域名、端口和路径替换成自己的值。若隧道开在 WSL、Chrome 跑在 Windows，请在 PowerShell 中测试回环端口，确认 Windows 也能连通。
+
+```sh
+curl --noproxy '*' --max-time 8 -fsS -o /dev/null -w '%{http_code}\n' --resolve panel.example.com:28443:127.0.0.1 'https://panel.example.com:28443/private-path/'
+```
 
 ```powershell
-# 在 PowerShell 中运行。仅为这个 Edge 配置映射证书域名。
-$edge = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'
-$profile = Join-Path $env:LOCALAPPDATA 'VPS-3xUI-Private'
-& $edge "--user-data-dir=$profile" '--no-proxy-server' `
-  '--host-resolver-rules=MAP panel.example.com 127.0.0.1' `
-  'https://panel.example.com:28443/private-path/'
+curl.exe --noproxy '*' --max-time 8 -fsS -o NUL -w '%{http_code}\n' --resolve panel.example.com:28443:127.0.0.1 'https://panel.example.com:28443/private-path/'
 ```
 
-也可从客户端验证原证书和 HTTP 应答。变量使用当前私有记录，`PANEL_PATH` 包含开头的斜杠。
+证书校验通过并收到预期登录页的状态码后，再打开浏览器。如果遇到证书域名不匹配，核对 URL 的域名与面板证书。出现 `404` 时检查登录路径。遇到连接拒绝或超时，先核对 SSH 会话、本地监听和 VPS 上的面板监听。
 
-```bash
-curl --noproxy '*' --max-time 8 -fsS -o /dev/null -w '%{http_code}\n' \
-  --resolve "$PANEL_HOST:$PANEL_PORT:127.0.0.1" \
-  "https://$PANEL_HOST:$PANEL_PORT$PANEL_PATH"
+### 用 Chrome 打开登录页
+
+Chrome 最终连接本机的转发端口，URL 仍使用证书域名。有本地域名映射时可以直接使用常用窗口，但系统级映射会影响其他应用和同域名下的其他端口。以下命令只给专用 Chrome 窗口设置域名映射与直连，日常 Chrome 可以继续使用原来的网络设置。浏览器的数据目录和 SSH 隧道的生命周期各自独立。
+
+```powershell
+# 修改为证书上的域名、SSH 命令左侧的端口和原登录路径。
+$panelHost = 'panel.example.com'
+$localPort = 28443
+$panelPath = '/private-path/'
+$chrome = @(
+    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
+    "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
+    "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if (-not $chrome) { throw 'Set $chrome to the path of chrome.exe.' }
+$dataDir = Join-Path $env:LOCALAPPDATA "VPS-3xUI-$panelHost"
+$chromeArgs = @(
+    "--user-data-dir=$dataDir"
+    "--host-resolver-rules=MAP $panelHost 127.0.0.1"
+    '--no-proxy-server'
+    "https://${panelHost}:$localPort$panelPath"
+)
+& $chrome @chromeArgs
 ```
+
+### 可选的桌面快捷方式
+
+需要频繁管理时，可写个本地启动脚本，先建立或复用 SSH 转发，确认本地端口可连接，再用上面的参数启动 Chrome。桌面快捷方式调用该脚本即可。换电脑时按前两节手工连接。快捷方式、实际登录地址和 SSH 凭据保存在本机。
 
 ## 3. 暂存 TLS 后端和 Xray 配置
 
