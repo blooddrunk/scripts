@@ -49,7 +49,7 @@
 4. **内核 6.12 上恢复的 tproxy TCP 黑洞**：`tcp_proxy_way='tproxy'`（24.10 可用）在 25.12 上 LAN 转发流量全部超时，nft 表/999 策略路由/xray 监听均正常但流量不到 xray；切 **`redirect`** 立即恢复。UDP 保持 tproxy 正常
 5. **订阅需走代理**：substore.haoqi90.top（CF）直连 000 超时、socks 代理 200 → `sub_hBFac.access_mode='proxy'`
 6. **路由器直连 GitHub 完全不通**（无代理时）；大文件搬运走 raksmart 临时 HTTP 中转（`python3 -m http.server 8899`，用完即关）。本机→路由器 scp 仅 74KB/s（WiFi 链路），路由器自下 koolcenter 是秒级
-7. **docker 全自动恢复**：数据盘不随 sysupgrade 变动，25.12 自带 docker 栈自动识别旧 data_root；唯一需补的是 bind-mount 在 overlay 上的 `/root/iptv-api`（本次已从备份恢复）
+7. **docker 全自动恢复**：数据盘不随 sysupgrade 变动，25.12 自带 docker 栈自动识别旧 data_root；唯一需补的是 bind-mount 在 overlay 上的 `/root/iptv-api`（docker 自启时会自动创建空 bind-mount 目录顶替，须 `docker stop` → 换回备份目录 → `docker start`，本次恢复后 42456 端口由 404 变 200）
 8. 规则重生成时会打印两行 `Error: no match countrycode found`（geoview 查询输出，不影响功能，未深究）
 9. tailscale-bootstrap 的 profile 表保留了历史 **hs-nosla（priority 30）**，failover 序 = raksmart(5) > bitsflow(20) > nosla(30)，与用户当前主备意图一致故未动
 
