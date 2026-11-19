@@ -68,6 +68,18 @@ homelab/openwrt-dns-daed/**/local*.conf
 homelab/openwrt-dns-daed/**/*.local.md
 
 # ============================================================
+# homelab/router-home-upgrade-2512
+# ============================================================
+
+# 升级前设备备份（含 PPPoE 密码/节点凭据/tailscale 身份等）与预下载大文件，
+# 仅保留本地（异地副本在 raksmart:/root/router-home-backups/）
+homelab/router-home-upgrade-2512/backup-*/
+homelab/router-home-upgrade-2512/staging/
+
+# 体检采集原始输出（含 network 全文/PPPoE 密码/订阅 URL），同上仅本地
+homelab/router-home-upgrade-2512/discovery/
+
+# ============================================================
 # homelab/substore-operators
 # ============================================================
 
