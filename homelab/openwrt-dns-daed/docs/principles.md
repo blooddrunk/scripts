@@ -103,15 +103,37 @@ dip(203.0.113.10/32) -> must_direct          # 错误示范
 
 ```text
 203.0.113.10:33973/tcp  → must_direct        # 节点入口
-203.0.113.10:443        → 不命中，继续向下匹配
+203.0.113.10:443        → 不命中，继续向下匹配（独立端口的情形）
 1Panel / 其他端口       → 不命中，继续向下匹配 → fallback: proxy
+```
+
+### Reality 与网站共用 443 时，endpoint 规则要放在域名规则之后
+
+当 Reality 绑定公网 IPv4 TCP 443、与同机 Web/Headscale 共用端口时（见 `vps-proxy-rollout`），443 入口规则**不能**放在文件顶部的 endpoint 区，而要放在所有针对同 IP 域名的规则（Headscale 控制面、Cloudflare Access 等）之后：
+
+```text
+domain(suffix: hs.example.top) -> tailscale-ctrl   # 先命中：带 SNI 的 443 流量
+...
+dip(203.0.113.10/32) && l4proto(tcp) && dport(443) -> must_direct   # 兜底：裸 IP 直连的才是节点入口
+```
+
+若把 443 规则放在域名规则之前，同机 Headscale/Web 的 443 流量会被抢先 `must_direct`，绕开分组出口。所以这类 443 endpoint 不进配置文件的 `NODE_ENDPOINTS`（那会生成在文件顶部），统一放 `routing-extra.dae` 末尾维护。
+
+### Hysteria2 端口跳跃段要双向放行
+
+Hy2 启用 `mport` 跳跃后，客户端出向 dport 在跳跃段内变化，服务端回程 sport 也在该段内。只放行固定口会让跳跃流量落入 `fallback: proxy`，形成代理回环。固定口 dip 之外还要补：
+
+```text
+dip(203.0.113.10/32) && l4proto(udp) && dport(40000-41000) -> must_direct
+sip(203.0.113.10/32) && l4proto(udp) && sport(40000-41000) -> must_direct
 ```
 
 ### 规则顺序不可乱
 
 ```text
 1. DNS/本机保护（pname must_direct）
-2. 代理节点 endpoint 精确 must_direct
+2. 代理节点 endpoint 精确 must_direct（IP+协议+端口，勿整台 VPS /32；
+   与同机服务共用 443 的 Reality 入口例外——放域名规则之后）
 3. 私网 / 组播 / 内部域名直连
 4. premium 特例（geosite:anthropic 等）
 5. proxy 特例（需要走代理的国内域名）
