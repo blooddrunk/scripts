@@ -19,6 +19,10 @@
  *   ok       -> clean
  *   china    -> cn
  *
+ * Invalid values log an error and fall back to `all` instead of throwing:
+ * a typo'd value on one client's subscription URL (e.g. a stale cache-busting
+ * suffix like `non-cn10`) must not 500 the whole download.
+ *
  * Parameter priority:
  *   $options > $arguments > defaults
  */
@@ -56,10 +60,19 @@ function normalizeGoogleStatus(value) {
   const result = STATUS_ALIASES[key];
 
   if (!result) {
-    throw new Error(
-      `Unknown googleStatus: ${value}. ` +
-      'Expected: all, clean, ok, non-cn, cn, china, unknown'
-    );
+    const message =
+      `Unknown googleStatus: ${value}; falling back to "all". ` +
+      'Expected: all, clean, ok, non-cn, cn, china, unknown';
+
+    if (
+      typeof $substore === 'object' &&
+      $substore &&
+      typeof $substore.error === 'function'
+    ) {
+      $substore.error(message);
+    }
+
+    return 'all';
   }
 
   return result;
