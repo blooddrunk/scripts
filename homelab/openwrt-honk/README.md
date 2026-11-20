@@ -98,7 +98,8 @@ bitsflow 不在集合内。home 只订一个订阅，nosla 用组过滤排除（
 - [x] 直连：baidu 200@0.07s、cernet 镜像 apk update 全通
 - [x] tailscale：status 正常、kwrt-1 会话持续在线、本 SSH 存活（含一次 honk lifecycle restart）
 - [x] cloudflared：隧道连接保持，**passwall2 时代每 5 分钟的 argotunnel DNS 刷新超时在切换后消失**
-- [x] LuCI/面板：doona(127.0.0.1:9527)、zashboard(:9090 已设密钥) 均可用；凭据在 `/root/honk-migration-20261120/panel-credentials.txt`
+- [x] LuCI/面板：doona(:9527)、zashboard(:9090) 均可用；凭据在 `/root/honk-migration-20261120/panel-credentials.txt`
+- [x] 2026-11-20 追加：DOONA native_api 改监听 `0.0.0.0:9527`（用户偏好其布局，远程 tailnet 直达 `http://192.168.100.1:9527/ui/`，password_auth 兜底）。附：自定义 config.dae 属 file-owned，`control.sh settings` 会以 `runtime_settings_owned_by_file` 拒改 runtime 字段——监听地址/密钥这类 experimental 字段直接改 config.dae + lifecycle restart 生效（热 reload 不重绑监听）
 - [x] 官方源升级：`apk update` + `apk search honk` 通过
 - [ ] 待抽查：真实 LAN 设备（手机/PC）上的 DNS 行为——ipversion_prefer:4 的 AAAA 压制、`.lan` 本地域名 asis 放行（路由器自身与 tailnet 远程路径查询走 dnsmasq，测不到 br-lan 拦截面）
 - [ ] 次日观察：无 passwall2 凌晨复活（cron 已中和）

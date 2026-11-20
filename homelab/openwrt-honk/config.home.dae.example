@@ -41,7 +41,10 @@ global {
 experimental {
     native_api {
         enabled: true
-        listen: '127.0.0.1:9527'
+        # DOONA 改为 LAN 可达（默认 127.0.0.1 远程只能走 SSH 隧道）；
+        # 有 password_auth 兜底。注意：自定义 config.dae 属 file-owned，
+        # control.sh settings 拒绝改 runtime 字段——监听地址只能改这里 + restart
+        listen: '0.0.0.0:9527'
         password_auth: true
         allow_anonymous_loopback: false
         config_write: true
