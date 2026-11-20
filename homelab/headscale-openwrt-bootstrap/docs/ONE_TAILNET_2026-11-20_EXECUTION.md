@@ -7,9 +7,9 @@ WireGuard 层和 SSH 未恢复。Raksmart → Bitsflow 的
 实际提升在旧域名转发检查失败后回退，DNS 未切到 Bitsflow。不要将
 隔离恢复通过或 `/health=200` 描述为主备切换验收通过。
 
-用户目前不在家，已要求暂停操作。回家后可复制
+用户目前不在家，已要求暂停主要迁移。回家后可复制
 [继续执行提示词](ONE_TAILNET_RESUME_PROMPT.md) 恢复本任务；暂停期间
-不要依据本记录主动操作服务器、DNS 或路由器。
+除用户另行明确要求的事项外，不要主动操作服务器、DNS 或路由器。
 
 ## 现网与已验证结果
 
@@ -34,10 +34,21 @@ WireGuard 层和 SSH 未恢复。Raksmart → Bitsflow 的
   然而来自公司路由器的家庭节点 TSMP 和家庭 LAN SSH 超时；普通
   disco `tailscale ping` 曾成功，
   它不证明 WireGuard 或 SSH 可用。需要恢复前禁止继续主备切换。
-- 本机 Windows `WORK-PC` 当前仍使用 `https://hs-raksmart.haoqi90.top`，
-  旧域名兼容入口必须保留；它并未完成稳定 URL 迁移。原 Bitsflow 独有
-  的在线 `qi-work-pc` 按用户决定暂不迁移；另有 5 台仅在旧网络中的
-  离线设备。它们不会自动合并到权威库，之后需逐台重新加入。
+- 本机 Windows `WORK-PC` 已是权威网络的节点 4，仍使用
+  `https://hs-raksmart.haoqi90.top`；旧域名兼容入口必须保留，稳定
+  URL 尚未迁移。用户随后确认希望从家中远程访问这台留在公司的电脑：
+  已启用 Windows Tailscale 无人值守模式，并核对节点公钥、IP、控制
+  地址及其他网络设置不变。来自两台公司 Tailnet 路由器的 WireGuard
+  探测成功，另一台公司路由器到 Windows 远程桌面 TCP 3389 建连及
+  网络级身份验证协议协商成功；未发送凭据或进行账号登录测试。
+  Windows 远程桌面已启用并要求网络级
+  身份验证，交流供电时的自动睡眠为关闭。不要为重复加入而重新注册。
+  后续从该 Windows 当前网络新建稳定及旧控制域名 TLS 连接均曾失败，
+  而服务器本机检查为 200，控制组也曾报告无可用出口；因此不能保证
+  断线或重启后立即重连，更不能推断家庭侧已可远程访问。
+  原 Bitsflow 独有的在线 `qi-work-pc` 按用户决定暂不迁移；另有 5 台
+  仅在旧网络中的离线设备。它们不会自动合并到权威库，之后需逐台
+  重新加入。
 - Headplane v0.8.2 Native 固定镜像摘要，监听回环地址；`/admin/` 无
   身份时跳转登录。曾用短期 API key 实际登录并查看 6 个节点，也验证
   暂停 Headplane 不影响 Headscale `/health`。不授予 Headplane 配置
