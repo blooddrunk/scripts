@@ -87,4 +87,24 @@ ssh -J bitsflow -N -L 19443:127.0.0.1:8443 raksmart   # 保持运行
 ```
 
 WORK-PC 已于同日迁移 ControlURL 至 `https://hs.haoqi90.top`
-（NodeID/IP 不变）。qi 路由器侧同类出口组问题待修。
+（NodeID/IP 不变）。qi 路由器侧同类出口组问题已修复：`tailscale-ctrl`
+为跨 VPS 三出口（main-hy2/raksmart 正则 + premium/lightlayer-hy2 +
+JP/bitsflow-hy2），与 m-w-r 同构；2026-11-20 深夜验收时两台组内均有
+≥2 个活跃出口。
+
+## 自建 DERP 的 STUN 探测方法（重要）
+
+headscale 内嵌 DERP 的 STUN **只回应 Tailscale 客户端形态的请求**：
+SOFTWARE 属性必须为 `tailnode` 且请求以 RFC 5389 FINGERPRINT 结尾
+（tailscale net/stun 源码行为，headscale#3379）。因此：
+
+- 普通探测器（stunclient、简易 RFC 5389 脚本）在本机回环也会超时，
+  **不要据此判定 STUN 故障**；
+- 正确姿势一：任意 tailnet 客户端跑 `tailscale netcheck`，看自建区
+  延迟行（公网回程被运营商丢包的路径除外，见执行记录）；
+- 正确姿势二：服务端 `tcpdump -n udp port 3478` 配合客户端 netcheck，
+  确认"请求到达 + 回包发出"，把服务端与回程路径分开判定。
+
+2026-11-20 深夜实测：服务端 0.2ms 内回包；bitsflow / lightlayer-zh
+两个公网观测点以 `tailnode` 形态探测均收到回包；公司上行方向的回程
+UDP 丢包为既有运营商问题，客户端由官方 Tokyo 区兜底。

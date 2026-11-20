@@ -1,11 +1,87 @@
 # 单 Tailnet 迁移执行记录：2026-11-20
 
+**2026-11-20 深夜完成公司侧验收：两台公司 daed 独立恢复演练通过、
+自建中继公网 STUN 回包确认、raksmart /32 MTU 与官方 DERP 直连两项调优
+落地。** router-home 的测试与调优尚未进行。详见
+[公司侧验收](#公司侧验收与调优2026-11-20-深夜)。
+
 **2026-11-20 晚间（台北时间）已恢复家庭 WireGuard 和 SSH，接入
 HOME-PC-2，并完成 Raksmart → Bitsflow → Raksmart 的生产演练。**
 Raksmart 是唯一活动写入端。后文保留当天早些时候的排查证据。
 
 节点接入步骤、Headplane 登录方式和 1Panel 实际配置归属见
-[节点接入与管理入口](ONE_TAILNET_ACCESS.md)。
+[节点接入与管理入口](ONE_TAILNET_ACCESS.md)；日常操作速查见
+[快速开始](ONE_TAILNET_QUICKSTART.md)。
+
+## 公司侧验收与调优（2026-11-20 深夜）
+
+### daed 独立恢复演练（qi、m-w-r 各一次）
+
+方法：setsid 脱离 SSH 的演练脚本（停 daed → 只读探测 → 重启 daed →
+复验），外加 300 秒兜底定时器；操作端已验证独立于被测 daed 的管理路径
+（m-w-r 走 LAN SSH，qi 经 m-w-r tailnet 子网路由）。daed init 自带
+procd respawn（3600 5 10），进程崩溃由 procd 自动拉起。两台结果一致：
+
+- 停 daed 后 `BackendState=Running` 保持，真直连（无 eBPF）控制面 TLS
+  全通过：稳定域名 200@~0.55s、旧 Raksmart 域名 200、`/derp/probe` 200
+  ——**公司直连 raksmart 的 TCP:443 MTU 黑洞由 /32 mtu 1280 主机路由 +
+  既有 MSS 1240 钳制覆盖，此前缺的 raksmart 路由已补上**（两台均
+  `network.vpsmtu4`，网关分别为 172.17.48.1 / 172.17.56.1）。
+- daed 重启后全部恢复：进程在、BackendState Running、控制域名与 LAN
+  DNS 200。全程无人工介入。
+- 已知代价：停 daed 瞬间，**经代理出口承载的官方 DERP 长连接死亡**，
+  tailnet 数据面经 1–2 分钟 DERP 重连后自愈（演练脚本内的 TSMP 探测
+  落在重连窗内超时，窗后实测 qi↔m-w-r、m-w-r↔home TSMP 均通）。
+- m-w-r 首次演练后出现一条半死 DERP 连接（Send-Q 10KB 不消化，状态
+  显示 active 但 TSMP 超时）。处置：确认 LAN SSH 独立可用后
+  `/etc/init.d/tailscale-core restart`，连接全部重建，TSMP 恢复
+  （qi 620ms、home 7ms 直连）。**教训：daed 停机窗口后若 relay 对端
+  TSMP 持续超时，先 `netstat -tnp` 看 tailscaled 连接的 Send-Q，
+  半死连接需重启 tailscale-core 清掉，等待 TCP 超时要 15 分钟以上。**
+
+### 官方 DERP 直连规则（两台已生效）
+
+演练暴露的耦合：routing 里没有 `tailscale.com` 直连规则，官方 DERP 与
+log.tailscale.com 落入 `fallback: proxy`，daed 一停 tailnet 兜底跟着断。
+修复：`domain(suffix: tailscale.com) -> direct` 插入 hs-bitsflow 规则
+之后，经 daed GraphQL（:2023，JWT）`parsedRouting` 校验 →
+`updateRouting` → `run(dry:false)` 热加载，未重启 daed；头部过期注释
+（"官方 DERP 走 fallback: proxy"）同步改正。两台
+`/etc/openwrt-dns-daed.d/routing-extra.dae` 片段与改前备份
+（`.bak-tsrule-*`）已同步。此后官方 DERP 连接不再依赖代理出口，
+daed 停机仅影响 raksmart 999/控制面长连接（官方区兜底仍在）。
+
+### 自建中继公网 STUN 回包
+
+- **headscale 内嵌 DERP 的 STUN 按设计只回应 Tailscale 客户端形态的
+  请求**（SOFTWARE 属性必须为 `tailnode` 且带 RFC 5389 FINGERPRINT，
+  参考 headscale#3379 与 tailscale net/stun 源码）。普通 RFC 5389 探测
+  （stunclient、简易脚本）在本机回环也被拒——这不是故障，探测方法要
+  对：用真客户端 `tailscale netcheck`，或带 `tailnode` SOFTWARE +
+  FINGERPRINT 的定制探测。
+- 服务端抓包（tcpdump udp 3478）：公司真实客户端请求到达，0.2ms 内
+  回包已从网卡发出；客户端收不到是 **raksmart→该上行方向的回程 UDP
+  丢包**（与既有运营商过滤结论一致）。
+- 模拟 Tailscale 形态的探测：bitsflow（US）与 lightlayer-zh（CN 线路）
+  均 `REPLY ok` ——公网可用性确认。公司/家庭路径收不到 999 STUN 时，
+  客户端自动用官方 Tokyo 等区（netcheck UDP:true），不影响 P2P 打洞。
+
+### hs.haoqi90.top 对 daed 配置影响的复核结论
+
+两台现状已符合规划：`domain(suffix: hs.haoqi90.top) -> tailscale-ctrl`、
+旧域名规则保留、`qname(suffix: haoqi90.top) -> alidns` 独立解析、
+UDP/3478 直连、Reality TCP/443 must_direct 位于 SNI 域名规则之后、
+ctrl 组为跨 VPS 多出口（qi 亦已修复：main-hy2/raksmart 正则 +
+premium/lightlayer-hy2 + JP/bitsflow-hy2）。本次新增调优两项：
+raksmart /32 MTU 主机路由、官方 DERP 直连（见上）。验收快照：两台
+连续 3 次控制域名 200@~0.5s、PollNetMap 无异常、WSL google
+generate_204 204@0.22s、经子网路由 SSH 对端可达。
+
+### 当前权威状态
+
+7 个节点（5 在线 + backey-laptop、xiaomi-15-pro 离线）、3 条 LAN 路由
+Approved+Serving、单用户 home。剩余待办：WORK-PC 账号登录测试、离线
+设备逐台核对、qi-work-pc 由用户手工接入、router-home 的测试与调优。
 
 ## 晚间恢复
 
@@ -116,9 +192,9 @@ IP、旧域名和旧域名模式。若提升中断，检查
 必须确认它已持久封锁，并以它的最新停机快照恢复。无法确认封锁时禁止
 启动另一写入端。
 
-仍待处理的事项为公司 daed 长期稳定性及独立恢复验收、自建中继的公网
-IPv4 STUN 回包、WORK-PC 账号登录和离线设备核对。`qi-work-pc` 由用户
-手工接入。
+公司 daed 独立恢复与自建中继公网 STUN 已于当晚验收（见上文）。仍待
+处理：WORK-PC 账号登录和离线设备核对、router-home 的测试与调优。
+`qi-work-pc` 由用户手工接入。
 
 ## 白天暂停前的现网记录
 

@@ -368,6 +368,18 @@ dip(203.0.113.99/32) && l4proto(tcp) && dport(8443) -> must_direct
 > UDP/3478 STUN 直连规则单独保留。下面的双域名锁出口方案是历史
 > 多网络示例，不是当前稳定域名的推荐配置。
 >
+> **同日深夜补充（公司侧验收结论）**：
+> ① `domain(suffix: tailscale.com) -> direct` 必须存在且不能省——
+> 否则官方 DERP/log 落入 `fallback: proxy`，daed 停机时 tailnet 兜底
+> 中继跟着断（实测 1–2 分钟自愈，期间还可能遗留 Send-Q 堆积的半死
+> 连接，需在确认独立管理通道后重启 tailscale-core 清除）；
+> ② 每台自建 VPS 的公网 IP 都要有 `/32 mtu 1280` 主机路由（换新
+> VPS/IP 后同步补——raksmart 2026-11-19 上线时两台都漏了，直连恢复
+> 验收时补齐）；③ headscale 内嵌 DERP 的 STUN 只回应 Tailscale 客户端
+> 形态请求（SOFTWARE=`tailnode`+FINGERPRINT），普通 STUN 探测器被
+> 按设计拒收，排障用 `tailscale netcheck` 或服务端 tcpdump，详见
+> headscale-openwrt-bootstrap/docs/ONE_TAILNET_ACCESS.md。
+>
 > daed 承载运维终端的网络时，即使有延时启动脚本也不能假设它能无人
 > 恢复。`one-tailnet-control.py` 只有在操作者已验证**不依赖该 daed**
 > 的管理和恢复路径，并显式传入 `--independent-access-verified` 后才

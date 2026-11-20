@@ -7,6 +7,13 @@
 项目在真实环境中按以下版本组合验证过：Headscale 0.29.3、Tailscale
 1.98.3、Kwrt/OpenWrt 25.12（fw4/nftables）、Debian 13、1Panel OpenResty。
 
+> **生产部署的日常操作**（Headplane 登录、添加/管理设备、常用命令、
+> 健康自查）见
+> [docs/ONE_TAILNET_QUICKSTART.md](docs/ONE_TAILNET_QUICKSTART.md)；
+> 单 Tailnet 架构、主备切换与验收证据见
+> [docs/](docs/) 下的 ONE_TAILNET_* 系列。本 README 余下内容面向
+> 全新部署与实现细节。
+
 ## 为什么安全
 
 多个系统管理层（Headscale、反向代理、tailscaled、fw4、netifd、第三方
@@ -388,9 +395,29 @@ geosite/geoip/fallback 之前）：
 ```lua
 pname(tailscaled) -> must_direct          -- 路由器自身流量（仅本机进程可匹配）
 l4proto(udp) && dport(3478) -> direct     -- STUN，LAN 客户端靠这条救回
-domain(suffix: tailscale.com) -> direct   -- 官方 DERP（使用官方 map 时）
+domain(suffix: tailscale.com) -> direct   -- 官方 DERP/log；必须直连，见下方实战注
 domain(suffix: <login-server-域名>) -> direct  -- 控制面；每个 profile 的域名都要各加一条
 ```
+
+> **官方 DERP 必须直连，不能落到 fallback: proxy（2026-11-20 实战教训）**：
+> 若官方 DERP 长连接经代理出口承载，透明代理一停（崩溃/维护），tailnet
+> 的兜底中继跟着断，数据面要等 DERP 重连 1–2 分钟才自愈；且停代理后
+> 遗留的半死连接（`netstat` Send-Q 堆积、状态 active 但 TSMP 超时）
+> 需要在确认独立管理通道后重启 tailscale-core 清除。自建 Headscale 与
+> 代理节点同机时，控制域名按上文锁出口分组，官方 DERP 仍走 direct。
+
+> **内嵌 DERP 的 STUN 探测方法（2026-11-20）**：headscale/tailscale
+> derper 的 STUN 按设计只回应 Tailscale 客户端形态的请求（SOFTWARE
+> 属性为 `tailnode` + RFC 5389 FINGERPRINT）。stunclient / 普通 RFC 5389
+> 脚本在本机回环也会超时——这不是故障；判定要用 `tailscale netcheck`
+> （真客户端）或服务端 `tcpdump udp port 3478` 观察回包是否发出，
+> 再把"服务端不回"与"公网回程丢包"分开归因。
+
+> **公司 WAN 的国际 TCP:443 MTU 黑洞**：对每台自建 VPS 公网 IP 加
+> `/32 mtu 1280` 主机路由 + WAN MSS 1240 钳制（缺一不可，见
+> openwrt-dns-daed README「上游 MTU 黑洞加固」）。**换新 VPS / 换 IP
+> 后必须同步补对应主机路由**——2026-11-19 raksmart 上线后两台公司
+> 路由器都漏了这条，直到 11-20 验收直连恢复时才补上。
 
 - P2P 数据面无需单独规则：打洞成功后对端是真实公网 IP，已有的
   `dip(geoip:cn)` / `dip(geoip:private) -> direct` 会接住（含国内 IPv6）。
@@ -423,9 +450,9 @@ Headscale VPS 本机上时，控制域名解析出的 IP 恰好命中排除集�
 别的层在兜底，如上游路由器的 daed）。
 
 正解是让 tailscaled **显式走 socks**，域名交给代理远端解析，绕开
-排除集合（2026-10-27 实战验证，快照与回滚见
-`backups/gl-mt3600be/20261027-selfcarry/`，完整证据链见运维日志
-事件三）：
+排除集合（2026-10-27 实战验证，完整证据链见运维日志
+[2026-10 事件三](docs/ops-log-2026-10.md)；当时的 GL.iNet 配置快照
+已随 Passwall2 退役清理，家庭路由器现为 honk）：
 
 ```sh
 # GL.iNet 固件真正的 init 是 tailscale-core（/etc/init.d/tailscale
@@ -664,4 +691,9 @@ tests/                      fixture 测试与假命令（均为合成数据）
   放开的代价、临时客户端验证 DERP map 的完整方法与陷阱）；approve-route
   无法 Serving 的真相（passwall2 防回环排除代理节点服务器 IP →
   透明分流原理性失效）与 tailscaled 显式走 socks 的自持架构改造
-  （`ALL_PROXY`，配置快照在 `backups/gl-mt3600be/`）。
+  （`ALL_PROXY`；配置快照已随 Passwall2 退役清理）。
+- [2026-11](docs/ops-log-2026-11.md)：nosla → raksmart 迁移与 daed
+  自伤修复；延迟排查（订阅回退真凶）；hs 站点双机纳入 1Panel 管理与
+  O_EXCL 建站坑；m-w-r 控制出口组修复与 WORK-PC ControlURL 无损迁移；
+  单 Tailnet 双向提升演练 + 公司侧验收（daed 独立恢复、自建 STUN
+  公网回包、官方 DERP 直连与 raksmart /32 MTU 调优）。
