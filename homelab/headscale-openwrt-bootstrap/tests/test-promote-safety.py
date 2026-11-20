@@ -14,6 +14,26 @@ promote = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(promote)
 
 
+class ClientSmoke(unittest.TestCase):
+    @patch.object(promote, 'read_json_command')
+    @patch.object(promote, 'ssh')
+    def test_derp_requires_handshake_with_map_hostname(self, ssh, read_json):
+        host_name = 'hs.example.test'
+        target_ip = '192.0.2.2'
+        state = [{'ControlURL': 'https://' + host_name}, {'BackendState': 'Running'},
+                 {'Regions': {'7': {}, '999': {'Nodes': [
+                     {'IPv4': target_ip, 'Name': '999', 'HostName': host_name}]}}}]
+        with self.subTest('connection established'):
+            read_json.side_effect = iter(state)
+            ssh.side_effect = ['200', json.dumps({'Info': [
+                f'Successfully established a DERP connection with node "{host_name}"']}), 'TSMP pong']
+            self.assertTrue(promote.client_smoke('router', host_name, target_ip, '100.64.0.1'))
+        with self.subTest('only HTTP health passes'):
+            read_json.side_effect = iter(state)
+            ssh.side_effect = ['200', '{"Info":null}']
+            self.assertFalse(promote.client_smoke('router', host_name, target_ip, '100.64.0.1'))
+
+
 class PromotionSafety(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -31,6 +51,7 @@ class PromotionSafety(unittest.TestCase):
         self.target_phase = 'writer-may-have-started'
         self.target_unreachable = False
         self.fail_seal = False
+        self.fail_clients = False
         fake_dr = SimpleNamespace(private_file=lambda p: Path(p))
         patches = [
             patch('importlib.machinery.SourceFileLoader.load_module', return_value=fake_dr),
@@ -47,6 +68,7 @@ class PromotionSafety(unittest.TestCase):
             patch.object(promote, 'target_state', side_effect=self.state),
             patch.object(promote, 'dns_change', side_effect=lambda *a: self.events.append(('dns', a[-1]))),
             patch.object(promote, 'client_smoke', return_value=True),
+            patch.object(promote, 'wait_for_clients', side_effect=self.wait_for_clients),
         ]
         for p in patches:
             p.start()
@@ -59,6 +81,11 @@ class PromotionSafety(unittest.TestCase):
     def prepare(self, host, archive, args):
         self.events.append(('prepare', host))
         return '/var/lib/headscale-dr/staged/snapshot-0123456789abcdef'
+
+    def wait_for_clients(self, args, target_ip, probes):
+        self.events.append(('clients', target_ip))
+        if self.fail_clients:
+            raise RuntimeError('client recovery not verified')
 
     def helper(self, host, path, args, **kwargs):
         if path == promote.FENCE:
@@ -86,7 +113,19 @@ class PromotionSafety(unittest.TestCase):
         e = self.events
         self.assertLess(e.index(('fence', 'old', 'seal')), e.index(('activate', 'new')))
         self.assertLess(e.index(('activate', 'new')), e.index(('relay', 'old')))
-        self.assertLess(e.index(('relay', 'old')), e.index(('dns', '192.0.2.2')))
+        client_check = e.index(('clients', '192.0.2.2'))
+        dns_update = e.index(('dns', '192.0.2.2'))
+        self.assertLess(e.index(('relay', 'old')), client_check)
+        self.assertLess(client_check, dns_update)
+        self.assertGreater(e.index(('clients', '192.0.2.2'), client_check + 1), dns_update)
+
+    def test_failed_client_recovery_rolls_back_before_dns_cutover(self):
+        self.fail_clients = True
+        with self.assertRaisesRegex(RuntimeError, 'safe rollback completed'):
+            promote.promote(self.args)
+        self.assertNotIn(('dns', '192.0.2.2'), self.events)
+        self.assertLess(self.events.index(('fence-target-and-cancel', 'new')),
+                        self.events.index(('activate', 'old')))
 
     def test_unhealthy_wireguard_prevents_fencing(self):
         with patch.object(promote, 'client_smoke', return_value=False):

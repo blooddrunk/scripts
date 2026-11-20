@@ -558,13 +558,15 @@ cd /var/backups/headscale-bootstrap/<timestamp> && sudo sha256sum -c manifest.sh
 [单 Tailnet 迁移计划](docs/ONE_TAILNET_PORTABLE_CONTROL_PLANE.md)。
 
 `headscale-promote.py` 仍需完整现场验收：第一次实际提升未通过旧域名
-转发检查，随后已安全回退；家庭路由器 WireGuard/SSH 尚未恢复，当前
-禁止再次提升。工具只供人工触发：先验证隔离恢复并持久封锁旧写入者，
-再恢复目标、切换 DNS 并验证客户端；如果目标可能已经写入，回退必须先
-封锁目标并从它的新快照恢复，无法验证目标封锁时不会重启旧主。
-`--preflight-only` 不停止服务；`HEADSCALE_DR_SSH_CONFIG` 可指定含跳板的
-私有 SSH 配置。自动选主、自动证书续期和定时快照尚未实现，不能把手工
-快照描述为持续复制。
+转发检查，随后已安全回退。家庭路由器 WireGuard 和 SSH 已恢复，
+生产演练的剩余条件见[执行记录](docs/ONE_TAILNET_2026-11-20_EXECUTION.md)。
+人工触发时先验证隔离恢复并持久封锁旧写入者，再恢复目标，经旧主的
+兼容转发验证 Headplane，以及路由器的 HTTPS、DERP 握手与 WireGuard
+后更新 DNS 并复测。如果目标可能已经写入，回退必须先封锁目标并使用
+其最新停机快照，确认封锁后才启动旧主。
+`--preflight-only` 不停止服务。`HEADSCALE_DR_SSH_CONFIG` 可指定含跳板的
+私有 SSH 配置。两台 VPS 的证书均已登记在各自的 1Panel 自动续期，
+备份目前按需执行，主备切换由人工触发。
 
 ## 状态文件
 

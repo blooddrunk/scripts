@@ -1,19 +1,74 @@
 # 单 Tailnet 迁移执行记录：2026-11-20
 
-**状态：暂停，等待用户回家后继续；任务未完成。** 以下为暂停前的
-最后观察，恢复工作时须重新检查，不能假定线上状态没有变化。
-权威控制面和两台公司路由器已恢复；家庭路由器的控制连接在线，但
-WireGuard 层和 SSH 未恢复。Raksmart → Bitsflow 的
-实际提升在旧域名转发检查失败后回退，DNS 未切到 Bitsflow。不要将
-隔离恢复通过或 `/health=200` 描述为主备切换验收通过。
+**状态（2026-11-20 晚间，台北时间）：家庭 WireGuard 和 SSH 已恢复，
+HOME-PC-2 已入网，生产主备演练待完成。** 下节记录本次复核，后续各节
+保留白天暂停前的历史证据。
 
-用户目前不在家，已要求暂停主要迁移。回家后可复制
-[继续执行提示词](ONE_TAILNET_RESUME_PROMPT.md) 恢复本任务；暂停期间
-除用户另行明确要求的事项外，不要主动操作服务器、DNS 或路由器。
 节点接入步骤、Headplane 登录方式和 1Panel 实际配置归属见
 [节点接入与管理入口](ONE_TAILNET_ACCESS.md)。
 
-## 现网与已验证结果
+## 晚间恢复
+
+- 从 HOME-PC-2 通过直连家庭 LAN `192.168.100.1`，用已知主机密钥登录。
+  重启前生成并验证包含原身份和 honk SQLite Online Backup 的加密快照，
+  路由器另留权限受限的身份副本。仅重启 `tailscale-core`，家庭
+  `tailscaled.state` 的 SHA-256 重启前后一致，原节点地址仍为 `100.64.0.1`。
+- Passwall2 自启此前已关闭，但现场发现主进程、透明转发规则和 UCI
+  `enabled=1` 仍在。保全 UCI 与 nftables 配置后停止主服务，将开关设为
+  `0`，关闭未使用的 `passwall2_server` 自启。复核主进程和拦截规则已清除，
+  活动 cron 中无 Passwall2 任务。honk 全程运行。
+- 家庭与两台公司路由器双向 TSMP 通过，两台公司路由器经
+  `192.168.100.1:22` 的回程 SSH 均实际通过主机密钥验证和认证。
+  家庭端可经批准路由登录 `192.168.6.1` 与 `192.168.10.1`。
+  HOME-PC-2 到 WORK-PC 的 RDP TCP 建连通过，家庭路由器作为来源的 RDP
+  协商也返回 NLA。账号登录仍待用户操作。
+- HOME-PC-2 以单次短期密钥重新认证为原节点 ID `5`，IPv4 `100.64.0.5`
+  和机器公钥保持一致，客户端节点密钥更新。实测 ControlURL 为
+  `https://hs.haoqi90.top`，到家庭路由器和 WORK-PC 的 TSMP 通过。
+  权威节点仍为 6 个。WORK-PC 继续使用旧 Raksmart 域名，
+  qi-work-pc 留待用户手工接入，离线 Android 设备的 ControlURL 未验证。
+- 两台公司 daed 保持运行。两处 AliDNS 返回当前权威 IP，UDP/3478
+  直连规则和 WAN MSS 钳制存在，Bitsflow 有 `/32 mtu 1280` 主机路由，
+  Raksmart 在两处均无对应 `/32`。`192.168.10.1` 曾对两个控制域名
+  返回 TLS EOF，随后两台路由器分别对每个域名连续 3 次返回 200。
+  后续 25 秒采样见两台路由器各自同一条到 Raksmart 443 的
+  tailscaled TCP 连接持续建立。长期稳定性、Raksmart 路径 MTU、
+  HY2 候选和无 daed 恢复仍待验收。
+- 家庭与两台公司路由器的 `tailscale debug derp` 实测 999、901 和
+  官方 Tokyo 区均完成 DERP 握手。三处的官方 Tokyo 探测均收到 IPv4
+  STUN 回包，两台自建中继的探测均未收到 IPv4 STUN 回包。
+  家庭已建立官方 Tokyo 连接。
+  Bitsflow 的 901 仍由临时恢复实例提供并占用 UDP/3478。
+- 重新入网后的权威快照 `raksmart-20261120T130600Z.tar.gz.gpg` 已通过
+  GPG、manifest 和 SQLite 校验，两台 VPS 的异地副本与本机 SHA-256
+  一致。按该快照在 Bitsflow 的仅回环命名空间恢复，6 个节点、身份、
+  地址和批准路由与权威一致。恢复后的家庭快照
+  `router-home-20261120T130903Z.tar.gz.gpg` 也已校验并复制到双机。
+  此前快照保留。新备份口令写入 HOME-PC-2
+  的 `~/.config/headscale-dr/home-pc-2-backup.passphrase`，
+  需另行托管在独立安全位置。两台 VPS 仅接收加密归档。
+- Raksmart 保持唯一权威，稳定和旧 Raksmart 域名的 TLS、健康检查及
+  稳定域名的 Headplane 登录页通过。双机证书已登记 1Panel 自动续期，
+  见[节点接入与管理入口](ONE_TAILNET_ACCESS.md)。
+  本次尚未进行生产 fencing、提升、DNS 变更或切回演练。
+
+## 生产演练的恢复顺序
+
+1. 在独立管理通道复核两台公司路由器的控制长连接、实际 HY2 出口、
+   Raksmart 主机路由 MTU/MSS 和管理恢复能力，再判断是否调整 daed。
+2. 在各站点确认官方和自建中继的实际数据面，分离 901 与目标 999。
+   如果迁移 901，先让客户端实际使用独立中继。若退役 901，先验证目标
+   客户端的替代中继以及无法直连时的 TSMP。确认客户端地图更新后再释放
+   备机的 UDP/3478 并处理恢复单元。保留 901 的配置、服务与证书回退。
+3. 将上次运维端的受限 DNS token 安全放回当前 WSL 的
+   `~/.config/headscale-dr/cloudflare-token`，权限 0600。HOME-PC-2
+   当前缺少该文件。更新并异地校验一致性快照，运行 `--preflight-only`。
+4. 执行受控提升。检查持久封锁和节点摘要，验证旧域名兼容、Headplane
+   与各路由器的 HTTPS、目标 DERP 握手和 TSMP 后才更新 DNS，再复测。
+   如需切回，先持久封锁现写入端，再用其最新停机快照恢复旧主。
+   保留最后一次已验证快照时间作为非计划故障的恢复点，备份目前按需执行。
+
+## 白天暂停前的现网记录
 
 - DNS Only `hs.haoqi90.top` A 指向 Raksmart，TTL 60，
   无额外 AAAA。Raksmart Headscale v0.29.3 和 Headplane 运行，稳定域名

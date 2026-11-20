@@ -148,14 +148,45 @@ def client_smoke(host, domain, target_ip, peer_ip):
     derp = read_json_command(host, 'tailscale debug derp-map')
     regions = derp.get('Regions', {})
     nodes = regions.get('999', {}).get('Nodes', [])
+    target_nodes = [node for node in nodes if node.get('IPv4') == target_ip]
     if not (prefs.get('ControlURL') == 'https://' + domain and status.get('BackendState') == 'Running'
-            and any(n.get('IPv4') == target_ip for n in nodes)
+            and len(target_nodes) == 1
             and any(k not in ('901', '999') for k in regions)):
+        return False
+    health = ssh(host, shlex.join(['curl', '--noproxy', '*', '--fail', '--silent', '--show-error',
+                                  '--max-time', '8', '-o', '/dev/null', '-w', '%{http_code}',
+                                  'https://' + domain + '/health']), timeout=12)
+    if health != '200':
+        return False
+    derp_probe = json.loads(ssh(host, 'tailscale debug derp 999', timeout=25))
+    derp_hostname = target_nodes[0].get('HostName')
+    if not derp_hostname:
+        return False
+    handshake = f'Successfully established a DERP connection with node "{derp_hostname}"'
+    if handshake not in (derp_probe.get('Info') or []):
         return False
     # A disco pong does not establish that WireGuard or SSH works.
     ssh(host, shlex.join(['tailscale', 'ping', '--tsmp', '--c', '2', '--timeout', '5s',
                           '--until-direct=false', peer_ip]), timeout=20)
     return True
+
+
+def wait_for_clients(args, target_ip, probes):
+    deadline = time.monotonic() + 180
+    pending = list(args.routers)
+    while pending and time.monotonic() < deadline:
+        remaining = []
+        for host in pending:
+            try:
+                if not client_smoke(host, args.domain, target_ip, probes[host]):
+                    remaining.append(host)
+            except (RuntimeError, ValueError, subprocess.TimeoutExpired):
+                remaining.append(host)
+        pending = remaining
+        if pending:
+            time.sleep(8)
+    if pending:
+        raise RuntimeError('client recovery not verified for: ' + ', '.join(pending))
 
 
 def reject_duplicate_derp(host, target_ip):
@@ -186,6 +217,8 @@ def promote(args):
     ipaddress.IPv4Address(args.target_ip)
     if args.source == args.target or args.source_ip == args.target_ip:
         raise RuntimeError('source and destination must differ')
+    if not args.routers or len(set(args.routers)) != len(args.routers):
+        raise RuntimeError('at least one router is required and router aliases must be unique')
     probes = {}
     for item in args.probes:
         host, separator, ip = item.partition('=')
@@ -280,23 +313,11 @@ def promote(args):
             helper(args.source, RELAY, [op, args.domain, args.source_legacy,
                                        args.source_ip, args.target_ip])
             journal(log, phase='legacy-relay-ready')
+            wait_for_clients(args, args.target_ip, probes)
+            journal(log, phase='clients-ready-before-dns')
             dns_change(token, args.cf_zone, args.domain, args.source_ip, args.target_ip)
             journal(log, phase='dns-updated')
-            deadline = time.monotonic() + 180
-            pending = list(args.routers)
-            while pending and time.monotonic() < deadline:
-                remaining = []
-                for host in pending:
-                    try:
-                        if not client_smoke(host, args.domain, args.target_ip, probes[host]):
-                            remaining.append(host)
-                    except Exception:
-                        remaining.append(host)
-                pending = remaining
-                if pending:
-                    time.sleep(8)
-            if pending:
-                raise RuntimeError('client recovery not verified for: ' + ', '.join(pending))
+            wait_for_clients(args, args.target_ip, probes)
             journal(log, phase='complete')
             print(json.dumps({'operation': op, 'active': args.target, 'fenced': args.source,
                               'dns': args.target_ip, 'nodes': count, 'routers_verified': len(args.routers),
@@ -362,7 +383,7 @@ def main():
     parser.add_argument('--preflight-only', action='store_true', help='verify preparation without fencing either host')
     args = parser.parse_args()
     if len(args.routers) < 1:
-        parser.error('at least one --router is required for post-cutover verification')
+        parser.error('at least one --router is required for cutover verification')
     promote(args)
 
 

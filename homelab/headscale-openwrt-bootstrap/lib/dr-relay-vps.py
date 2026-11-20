@@ -79,17 +79,18 @@ def main():
         run(['docker', 'exec', container, 'openresty', '-s', 'reload'])
         for attempt in range(15):
             statuses = []
-            for name in (domain, legacy):
+            for name, endpoint in ((domain, '/health'), (legacy, '/health'), (domain, '/admin/login')):
                 result = run(['curl', '-sS', '--noproxy', '*', '--max-time', '10', '-o', '/dev/null', '-w', '%{http_code}',
-                              '--resolve', name + ':443:' + source_ip, 'https://' + name + '/health'], False)
+                              '--resolve', name + ':443:' + source_ip, 'https://' + name + endpoint], False)
                 statuses.append(result.stdout if not result.returncode else 'failed')
-            if statuses == ['200', '200']:
+            if statuses == ['200', '200', '200']:
                 break
             time.sleep(1)
         else:
             raise RuntimeError('former domain relay health checks failed: ' + ','.join(statuses))
         (fence / 'RELAY_READY').touch(mode=0o600, exist_ok=False)
-        print(json.dumps({'former_writer': 'masked', 'stable_relay': 200, 'legacy_relay': 200}, sort_keys=True))
+        print(json.dumps({'former_writer': 'masked', 'stable_relay': 200, 'legacy_relay': 200,
+                          'headplane_login': 200}, sort_keys=True))
     except Exception:
         for i, path in enumerate(paths + [admin]):
             saved = backup / str(i)
