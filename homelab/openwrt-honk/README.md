@@ -138,6 +138,10 @@ apk update && apk upgrade honk luci-app-honk   # 或 LuCI → 服务 → Honk �
 本目录文件保持脱敏：节点 IP 用 RFC 5737 占位、域名用 example.top、订阅 URL 去除 token。
 真实值只存在于路由器 `/etc/honk/config.dae` 与本地记忆，勿提交。
 
+## 后续计划（已定稿未执行）
+
+- [quota-aware-policy-plan.md](quota-aware-policy-plan.md) —— 流量感知节点策略：us/jp 池 + `proxy` 组 score 先行 + `premium` 组 selector 由 komari 配额脚本切换；Sub-Store 每 VPS 单订阅导出做池身份。等用户回家经 LAN 执行（plan 文末含执行 prompt）。
+
 ## 已知关联问题（非本次范围，记录备查）
 
 - 公司侧 daed 有两个订阅使用已失效的过滤参数（`googleStatus=non-cn10/non-cn20`，Sub-Store 现仅接受 all/clean/ok/non-cn/cn/china/unknown），拉取返回错误 JSON
