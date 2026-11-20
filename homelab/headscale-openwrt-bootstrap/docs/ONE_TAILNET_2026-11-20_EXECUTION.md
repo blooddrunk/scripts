@@ -1,5 +1,11 @@
 # 单 Tailnet 迁移执行记录：2026-11-20
 
+**2026-11-21 凌晨：hs-raksmart / hs-bitsflow 旧控制域名已全部退役**
+（客户端清点完毕后，两台 VPS 的 1Panel 站点+证书、Cloudflare 记录、
+两台公司路由器 daed 规则一并移除；promote 工具链的 legacy 参数改为
+可选，无 legacy 的 `--preflight-only` 已跑通）。详见
+[旧域名退役](#旧域名退役2026-11-21-凌晨)。
+
 **2026-11-20 深夜完成公司侧验收：两台公司 daed 独立恢复演练通过、
 自建中继公网 STUN 回包确认、raksmart /32 MTU 与官方 DERP 直连两项调优
 落地。** router-home 的测试与调优尚未进行。详见
@@ -12,6 +18,40 @@ Raksmart 是唯一活动写入端。后文保留当天早些时候的排查证�
 节点接入步骤、Headplane 登录方式和 1Panel 实际配置归属见
 [节点接入与管理入口](ONE_TAILNET_ACCESS.md)；日常操作速查见
 [快速开始](ONE_TAILNET_QUICKSTART.md)。
+
+## 旧域名退役（2026-11-21 凌晨）
+
+前置清点：hs-raksmart vhost 当日仅剩 127.0.0.1 的 derp/latency-check
+探测与运维 /health 检查，最后一次 `/ts2021` 控制面握手在昨晚提升演练
+窗口内结束；hs-bitsflow vhost 仅剩 503 探测。全部在线客户端（三台
+路由器 + WORK-PC + HOME-PC-2）的 DERP map 与 ControlURL 均已是稳定
+域名，无功能性依赖。据此执行退役：
+
+- **路由器 daed（两台，GraphQL 热加载）**：删除
+  `hs-raksmart → tailscale-ctrl`、`hs-bitsflow → tailscale-derp` 两条
+  规则，`routing-extra.dae` 同步（改前备份 `.bak-legacy-retire-*`）；
+  `tailscale-derp` 分组已无规则引用，保留未删（无害，重放时可不建）。
+- **1Panel**：raksmart 删 website id=5（hs-raksmart）+ 证书 id=7；
+  bitsflow 删 website id=2（hs-bitsflow）+ 证书 id=3。API
+  `websites/del`（forceDelete）+ `websites/ssl/del`（body 为
+  `{"ids":[N]}`）。两机各自的稳定域名站点/证书（raksmart 8/10、
+  bitsflow 5/6）不受影响；conf/proxy/日志完整备份在各自
+  `/root/legacy-retire-20261121/<域名>/`。
+- **Cloudflare**：删除 hs-raksmart、hs-bitsflow 两条 A 记录（其余记录
+  未动；`hs-nosla`、`nosla`、`relay` 仍指向 82.139.215.223，属 nosla
+  退役遗留，待用户决定）。
+- **promote 工具链**：`--source-legacy/--target-legacy` 改为可选
+  （缺省 `-` 表示无旧域名），dr-activate/dr-relay/dr-install-site 以
+  `-` 占位跳过旧 vhost 操作；dr-install-site 无模板来源时使用内置
+  8443 模板。无 legacy 参数的两台公司路由器 `--preflight-only` 实跑
+  通过（隔离恢复 7 节点一致）。
+- **残留观察**：仍有客户端经两台 VPS 的 xray 出口以 SNI hs-raksmart /
+  hs-bitsflow 做 derp 探测（4-5s 一次）——特征指向家路由器持有的
+  过期 DERP map（其流量恰好经两台 reality 出口；家↔WORK-PC 实际走
+  P2P 直连不受影响）。DNS 退役后这些探测自然消亡；router-home 调优
+  时重启其 tailscale-core 即可清掉陈旧地图。
+- MagicDNS 基域仍为 `ts.hs-raksmart.haoqi90.top`（按计划保留，纯
+  客户端内部名字，不依赖公网 DNS；未来迁移另行处理）。
 
 ## 公司侧验收与调优（2026-11-20 深夜）
 
@@ -175,8 +215,6 @@ python3 homelab/headscale-openwrt-bootstrap/headscale-promote.py \
   --source raksmart --source-ip 107.148.154.129 \
   --target bitsflow --target-ip 216.23.86.169 \
   --domain hs.haoqi90.top --cf-zone haoqi90.top \
-  --source-legacy hs-raksmart.haoqi90.top --source-legacy-mode local \
-  --target-legacy hs-bitsflow.haoqi90.top --target-legacy-mode blocked \
   --cf-token-file "$HOME/.config/headscale-dr/cloudflare-token" \
   --passphrase-file "$HOME/.config/headscale-dr/home-pc-2-backup.passphrase" \
   --backup-dir "$HOME/.local/share/headscale-dr/backups" \
@@ -186,15 +224,21 @@ python3 homelab/headscale-openwrt-bootstrap/headscale-promote.py \
   --preflight-only
 ```
 
-预检通过后移除 `--preflight-only` 执行。计划切回时对调源和目标的主机、
-IP、旧域名和旧域名模式。若提升中断，检查
+`--probe ROUTER=PEER_IP` 的语义是"从该路由器 TSMP 探测的对端 IP"，
+不是路由器自己的地址。旧域名已于 2026-11-21 退役，
+`--source-legacy`/`--target-legacy` 缺省即 `-`（无旧域名），无需再传；
+若未来再出现需要兼容的旧域名，显式传入即可。
+
+预检通过后移除 `--preflight-only` 执行。计划切回时对调源和目标的
+主机与 IP。若提升中断，检查
 `~/.local/share/headscale-dr/operations/` 对应事务。目标可能已写入时，
 必须确认它已持久封锁，并以它的最新停机快照恢复。无法确认封锁时禁止
 启动另一写入端。
 
-公司 daed 独立恢复与自建中继公网 STUN 已于当晚验收（见上文）。仍待
-处理：WORK-PC 账号登录和离线设备核对、router-home 的测试与调优。
-`qi-work-pc` 由用户手工接入。
+公司 daed 独立恢复与自建中继公网 STUN 已于当晚验收（见上文）。
+WORK-PC 账号登录与 `qi-work-pc` 接入已由用户完成（权威网络现为
+7 节点）；其余离线设备由用户择机加入。仍待处理：router-home 的
+测试与调优（含其陈旧 DERP map 的清理）。
 
 ## 白天暂停前的现网记录
 

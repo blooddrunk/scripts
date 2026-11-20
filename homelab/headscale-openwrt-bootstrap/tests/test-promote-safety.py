@@ -187,3 +187,26 @@ class PromotionSafety(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class LegacyLessPromotion(PromotionSafety):
+    """A deployment whose old control domains are fully retired."""
+
+    def setUp(self):
+        super().setUp()
+        self.args.source_legacy = '-'
+        self.args.target_legacy = '-'
+
+    def test_success_without_legacy_domains(self):
+        promote.promote(self.args)
+        relay = next(event for event in self.events if event[0] == 'relay')
+        activate = next(event for event in self.events if event[:2] == ('activate', 'new'))
+        # The helpers still receive the placeholder and the blocked mode.
+        legacy_modes = [event for event in self.events if event[0] in ('legacy-mode', 'relay-legacy-mode')]
+        self.assertTrue(all(mode[2] in ('local', 'blocked') for mode in legacy_modes))
+        self.assertTrue(relay and activate)
+
+    def test_invalid_legacy_name_still_rejected(self):
+        self.args.source_legacy = 'bad..name'
+        with self.assertRaisesRegex(RuntimeError, 'invalid DNS name'):
+            promote.promote(self.args)

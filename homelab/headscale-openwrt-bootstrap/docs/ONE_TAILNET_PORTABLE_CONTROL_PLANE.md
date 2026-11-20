@@ -1,6 +1,6 @@
 # 单 Tailnet / 可迁移 Headscale 控制平面：两轮实施计划
 
-状态：**主体完成——双向提升演练与公司侧验收已过，router-home 调优与离线设备待办**
+状态：**主体完成——双向提升演练与公司侧验收已过，旧控制域名 hs-raksmart/hs-bitsflow 已于 2026-11-21 退役，router-home 调优与离线设备待办**
 制定日期：2026-11-20  
 仓库：blooddrunk/scripts  
 权威网络：Raksmart 现有 Headscale 数据与节点；Bitsflow 现有 Headscale 作为独立旧网络，仅供过渡与归档  

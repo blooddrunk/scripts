@@ -25,7 +25,8 @@ def main():
         raise RuntimeError('invalid legacy mode')
     if not re.fullmatch(r'[a-f0-9]{16}', op):
         raise RuntimeError('invalid operation')
-    for name in (domain, legacy):
+    has_legacy = legacy != '-'
+    for name in (domain, legacy) if has_legacy else (domain,):
         if not re.fullmatch(r'[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?', name) or '..' in name:
             raise RuntimeError('invalid domain')
     for ip in (source_ip, target_ip):
@@ -44,7 +45,9 @@ def main():
     if len(matches) != 1 or not re.fullmatch(r'[A-Za-z0-9_.-]+', matches[0]):
         raise RuntimeError('cannot identify exactly one OpenResty container')
     container = matches[0]
-    paths = [Path('/opt/1panel/www/sites') / name / 'proxy/root.conf' for name in (domain, legacy)]
+    paths = [Path('/opt/1panel/www/sites') / domain / 'proxy/root.conf']
+    if has_legacy:
+        paths.append(Path('/opt/1panel/www/sites') / legacy / 'proxy/root.conf')
     admin = paths[0].with_name('headplane.conf')
     if any(not p.is_file() for p in paths):
         raise RuntimeError('expected former-writer sites are missing')
@@ -75,26 +78,32 @@ def main():
 '''.replace('TARGET', target_ip).replace('DOMAIN', domain)
     try:
         paths[0].write_text(config)
-        paths[1].write_text(config if legacy_mode == 'local' else 'location ^~ / { return 503; }\n')
+        if has_legacy:
+            paths[1].write_text(config if legacy_mode == 'local' else 'location ^~ / { return 503; }\n')
         if admin.exists():
             admin.unlink()
         run(['docker', 'exec', container, 'openresty', '-t'])
         run(['docker', 'exec', container, 'openresty', '-s', 'reload'])
         for attempt in range(15):
+            checks = [(domain, '/health')]
+            if has_legacy:
+                checks.append((legacy, '/health'))
+            checks.append((domain, '/admin/login'))
             statuses = []
-            for name, endpoint in ((domain, '/health'), (legacy, '/health'), (domain, '/admin/login')):
+            for name, endpoint in checks:
                 result = run(['curl', '-sS', '--noproxy', '*', '--max-time', '10', '-o', '/dev/null', '-w', '%{http_code}',
                               '--resolve', name + ':443:' + source_ip, 'https://' + name + endpoint], False)
                 statuses.append(result.stdout if not result.returncode else 'failed')
-            legacy_expected = '200' if legacy_mode == 'local' else '503'
-            if statuses == ['200', legacy_expected, '200']:
+            expected = ['200'] + (['200' if legacy_mode == 'local' else '503'] if has_legacy else []) + ['200']
+            if statuses == expected:
                 break
             time.sleep(1)
         else:
             raise RuntimeError('former domain relay health checks failed: ' + ','.join(statuses))
         (fence / 'RELAY_READY').touch(mode=0o600, exist_ok=False)
-        print(json.dumps({'former_writer': 'masked', 'stable_relay': 200, 'legacy_relay': int(legacy_expected),
-                          'headplane_login': 200}, sort_keys=True))
+        result = {'former_writer': 'masked', 'stable_relay': 200,
+                  'legacy_relay': (int(expected[1]) if has_legacy else 'absent'), 'headplane_login': 200}
+        print(json.dumps(result, sort_keys=True))
     except Exception:
         for i, path in enumerate(paths + [admin]):
             saved = backup / str(i)

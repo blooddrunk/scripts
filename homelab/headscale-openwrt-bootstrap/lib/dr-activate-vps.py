@@ -102,12 +102,16 @@ def main():
     # command from starting this writer after the source has been restored.
     if (Path('/var/lib/headscale-dr/canceled') / op).exists():
         raise RuntimeError('activation was canceled before it acquired the writer lock')
-    for name in (domain, legacy):
+    has_legacy = legacy != '-'
+    for name in (domain, legacy) if has_legacy else (domain,):
         if not re.fullmatch(r'[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?', name) or '..' in name:
             raise RuntimeError('invalid domain')
     ipaddress.IPv4Address(ip)
-    if domain == legacy or legacy_mode not in ('local', 'blocked'):
+    if legacy_mode not in ('local', 'blocked') or (has_legacy and domain == legacy):
         raise RuntimeError('invalid destination legacy mode')
+    if not has_legacy and legacy_mode != 'blocked':
+        # No legacy vhost exists to serve locally.
+        raise RuntimeError('a legacy-less deployment must use the blocked mode')
     if not re.search(r'\binet\s+' + re.escape(ip) + r'/', run(['ip', '-o', '-4', 'addr', 'show', 'scope', 'global']).stdout):
         raise RuntimeError('target IP not assigned to host')
     stage = Path(stage_path)
@@ -119,10 +123,11 @@ def main():
     if config.get('server_url') != 'https://' + domain or config['derp']['server']['enabled'] is not True:
         raise RuntimeError('unexpected control URL or embedded DERP state')
     stable_root = Path('/opt/1panel/www/sites') / domain / 'proxy/root.conf'
-    legacy_root = Path('/opt/1panel/www/sites') / legacy / 'proxy/root.conf'
+    legacy_root = Path('/opt/1panel/www/sites') / legacy / 'proxy/root.conf' if has_legacy else None
     admin = stable_root.with_name('headplane.conf')
-    if not stable_root.is_file() or not legacy_root.is_file():
-        raise RuntimeError('stable and legacy proxy sites must already exist')
+    tracked = [stable_root] + ([legacy_root] if has_legacy else [])
+    if any(not path.is_file() for path in tracked):
+        raise RuntimeError('expected proxy sites must already exist')
     containers = run(['docker', 'ps', '--format', '{{.Names}} {{.Image}}']).stdout.splitlines()
     matches = [line.split()[0] for line in containers if 'openresty' in line.lower()]
     if len(matches) != 1 or not re.fullmatch(r'[A-Za-z0-9_.-]+', matches[0]):
@@ -130,7 +135,7 @@ def main():
     container = matches[0]
     # A restored writer must not accidentally appear through an untracked vhost.
     for path in Path('/opt/1panel/www/sites').glob('*/proxy/*.conf'):
-        if '127.0.0.1:8080' in path.read_text(errors='replace') and path not in (stable_root, legacy_root):
+        if '127.0.0.1:8080' in path.read_text(errors='replace') and path not in tracked:
             raise RuntimeError('an additional Headscale proxy site requires manual review')
     root = Path('/var/lib/headscale-dr/activations')
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -138,7 +143,7 @@ def main():
     txn = root / op
     txn.mkdir(mode=0o700)
     for name, path in [('stable-root', stable_root), ('legacy-root', legacy_root), ('admin', admin)]:
-        if path.exists():
+        if path is not None and path.exists():
             shutil.copyfile(path, txn / name)
             os.chmod(txn / name, 0o600)
     def journal(phase):
@@ -162,7 +167,8 @@ def main():
     try:
         # Close every known public entry before touching the old target writer.
         stable_root.write_text('location ^~ / { return 503; }\n')
-        legacy_root.write_text('location ^~ / { return 503; }\n')
+        if legacy_root is not None:
+            legacy_root.write_text('location ^~ / { return 503; }\n')
         if admin.exists():
             admin.unlink()
         reload_proxy()
@@ -209,15 +215,19 @@ def main():
         if derp != '200':
             raise RuntimeError('restored DERP probe failed')
         stable_root.write_text(ROOT_PROXY)
-        if legacy_mode == 'local':
+        if legacy_root is not None and legacy_mode == 'local':
             legacy_root.write_text(ROOT_PROXY)
         admin.write_text(HEADPLANE_PROXY)
         run(['systemctl', 'enable', '--now', 'headplane'])
         reload_proxy()
         for attempt in range(15):
-            expected_legacy = '200' if legacy_mode == 'local' else '503'
-            checks = [status(domain, ip, '/health'), status(domain, ip, '/admin/login'), status(legacy, ip, '/health')]
-            if checks == ['200', '200', expected_legacy]:
+            checks = [status(domain, ip, '/health'), status(domain, ip, '/admin/login')]
+            if legacy_root is not None:
+                checks.append(status(legacy, ip, '/health'))
+                expected = ['200', '200', '200' if legacy_mode == 'local' else '503']
+            else:
+                expected = ['200', '200']
+            if checks == expected:
                 break
             time.sleep(1)
         else:

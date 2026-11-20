@@ -356,7 +356,8 @@ def main():
     site = sub.add_parser('install-site', help='prepare a new 1Panel site with timed rollback')
     site.add_argument('--host', required=True)
     site.add_argument('--domain', required=True)
-    site.add_argument('--legacy-domain', required=True)
+    site.add_argument('--legacy-domain', default='-',
+                       help="existing vhost to clone, or '-' when the host has none")
     site.add_argument('--ip', required=True)
     site.add_argument('--role', choices=('active', 'standby'), required=True)
     site.add_argument('--certificate', required=True)

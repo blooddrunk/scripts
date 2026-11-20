@@ -363,10 +363,11 @@ dip(203.0.113.99/32) && l4proto(tcp) && dport(8443) -> must_direct
 
 > **2026-11-20 单 Tailnet 更新**：固定控制域名 `hs.haoqi90.top` 的
 > `tailscale-ctrl` 应包含来自不同 VPS/订阅的至少两个可用 HY2 出口，
-> 不再永久锁定某一台 VPS。旧控制域名规则在旧客户端清点完成前保留；
-> `DAED_DNS_SELF_DOMAINS=haoqi90.top` 继续使用独立的 AliDNS 解析，
-> UDP/3478 STUN 直连规则单独保留。下面的双域名锁出口方案是历史
-> 多网络示例，不是当前稳定域名的推荐配置。
+> 不再永久锁定某一台 VPS。旧控制域名（hs-raksmart/hs-bitsflow）的
+> 分流规则曾为未迁完的旧客户端保留，已于 2026-11-21 客户端清点完毕
+> 后移除；`DAED_DNS_SELF_DOMAINS=haoqi90.top` 继续使用独立的 AliDNS
+> 解析，UDP/3478 STUN 直连规则单独保留。下面的双域名锁出口方案是
+> 历史多网络示例，不是当前稳定域名的推荐配置。
 >
 > **同日深夜补充（公司侧验收结论）**：
 > ① `domain(suffix: tailscale.com) -> direct` 必须存在且不能省——

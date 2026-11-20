@@ -59,8 +59,10 @@ hs.haoqi90.top 的站点与证书已在两台 VPS 纳入 1Panel 管理（面板�
 - **不要在 1Panel 面板编辑该站点的反代/HTTPS 配置**：面板重写会丢失
   `listen 127.0.0.1:8443`、长超时与 `/admin/` 转发，进而与 Xray 抢
   443。proxy 文件以 DR 工具（`dr-activate-vps.py`）模板为准。
-- Bitsflow 的稳定域名转发到 Raksmart，旧 `hs-bitsflow` 域名返回 503。
-  提升或切回时由 DR 工具改写，备用机的 Headscale 持久 `masked`。
+- Bitsflow 的稳定域名转发到 Raksmart（服务切回前缓存的地址）。
+  旧 `hs-bitsflow` 与 raksmart 的旧 `hs-raksmart` 站点、证书和 DNS
+  已于 2026-11-21 随客户端迁移完毕退役。提升或切回时由 DR 工具改写
+  稳定域名站点的 proxy，备用机的 Headscale 持久 `masked`。
 - 变更前完整备份（含旧 acme.sh 证书）：两机 `/root/1panel-import-20261120T1122/112333Z`；
   执行脚本 `/root/hs1panel_*.sh`。操作细节与 O_EXCL 建站坑见
   ops-log-2026-11.md 事件七。

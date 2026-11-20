@@ -211,6 +211,8 @@ def promote(args):
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', host):
             raise RuntimeError('invalid SSH alias')
     for name in (args.domain, args.source_legacy, args.target_legacy, args.cf_zone):
+        if name == '-':
+            continue
         if not re.fullmatch(r'[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?', name) or '..' in name:
             raise RuntimeError('invalid DNS name')
     ipaddress.IPv4Address(args.source_ip)
@@ -321,7 +323,8 @@ def promote(args):
             journal(log, phase='complete')
             print(json.dumps({'operation': op, 'active': args.target, 'fenced': args.source,
                               'dns': args.target_ip, 'nodes': count, 'routers_verified': len(args.routers),
-                              'legacy_relay': 'blocked' if args.source_legacy_mode == 'blocked' else 'healthy',
+                              'legacy_relay': ('absent' if args.source_legacy == '-' else
+                                               ('blocked' if args.source_legacy_mode == 'blocked' else 'healthy')),
                               'backup': final_archive, 'journal': str(log)}, sort_keys=True))
         except Exception as original:
             journal(log, phase='failed', error=str(original)[:350])
@@ -375,9 +378,15 @@ def promote(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for arg in ('source', 'target', 'source-ip', 'target-ip', 'domain', 'source-legacy', 'target-legacy',
+    for arg in ('source', 'target', 'source-ip', 'target-ip', 'domain',
                 'cf-zone', 'cf-token-file', 'passphrase-file', 'backup-dir'):
         parser.add_argument('--' + arg, required=True)
+    # Legacy control domains are retired once every client uses the stable
+    # URL. Omit them (or pass '-') for a legacy-less deployment.
+    parser.add_argument('--source-legacy', default='-',
+                        help="the fenced source's old control domain, or '-' when it has none")
+    parser.add_argument('--target-legacy', default='-',
+                        help="the promoted target's old control domain, or '-' when it has none")
     parser.add_argument('--router', dest='routers', action='append', default=[])
     parser.add_argument('--probe', dest='probes', action='append', default=[],
                         metavar='ROUTER=PEER_IP', help='WireGuard TSMP peer required for each router')

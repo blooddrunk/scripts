@@ -590,8 +590,9 @@ cd /var/backups/headscale-bootstrap/<timestamp> && sudo sha256sum -c manifest.sh
 兼容转发验证 Headplane，以及路由器的 HTTPS、DERP 握手与 WireGuard
 后更新 DNS 并复测。如果目标可能已经写入，回退必须先封锁目标并使用
 其最新停机快照，确认封锁后才启动旧主。
-计划切回时对调源和目标，并随主机对调 `--source-legacy-mode` 和
-`--target-legacy-mode` 指定的旧域名策略。
+计划切回时对调源和目标的主机与 IP；旧控制域名退役后无需传
+`--source-legacy`/`--target-legacy`（缺省 `-` 表示无旧域名；仍传旧
+域名时用 `--source-legacy-mode`/`--target-legacy-mode` 指定其策略）。
 `--preflight-only` 不停止服务。`HEADSCALE_DR_SSH_CONFIG` 可指定含跳板的
 私有 SSH 配置。两台 VPS 的证书均已登记在各自的 1Panel 自动续期，
 备份目前按需执行，主备切换由人工触发。
