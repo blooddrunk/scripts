@@ -8,21 +8,28 @@
 # 本文件中的规则目标均不与 CN/私网规则重叠，位置语义安全。
 #
 # 依赖的 daed 分组（须先在 GUI 创建，名称一致）:
-#   doh              跨 VPS 的 Reality 节点集合（fallback DoH 专用承载）
+#   doh              跨 VPS、跨协议的 DoH 承载组（如 JP hy2|reality + US raksmart）
 #   tailscale-ctrl   出口在 headscale 控制面 VPS 本机的节点
 #   tailscale-derp   出口在 DERP VPS 本机的节点
 # ============================================================
 
-# ---- Hysteria2 回程精确直连（节点入口 UDP sport，install 不会生成，须在此维护）----
-sip(203.0.113.10/32) && l4proto(udp) && sport(51237) -> must_direct
+# ---- Hysteria2 回程与跳跃段精确直连（install 不会生成，须在此维护）----
+# install 按 NODE_ENDPOINTS 生成固定口 dip 规则；此处补三样：
+# 1) 各固定口回程 sip(sport)
+# 2) mport 端口跳跃段（dip/sip 出入向都要放行，漏掉会落入
+#    fallback: proxy 形成代理回环；示例跳跃段 40000-41000）
+# 3) 见文件末尾：Reality TCP 443 入口（不能进 NODE_ENDPOINTS，原因见下）
+sip(203.0.113.10/32) && l4proto(udp) && sport(50757) -> must_direct
 sip(203.0.113.20/32) && l4proto(udp) && sport(47777) -> must_direct
-sip(203.0.113.30/32) && l4proto(udp) && sport(36143) -> must_direct
+dip(203.0.113.10/32, 203.0.113.20/32) && l4proto(udp) && dport(40000-41000) -> must_direct
+sip(203.0.113.10/32, 203.0.113.20/32) && l4proto(udp) && sport(40000-41000) -> must_direct
 
 # ---- STUN (UDP 3478) 直连：含 LAN 客户端与路由器自身的 NAT 穿越 ----
 l4proto(udp) && dport(3478) -> direct
 
 # ---- Headscale 控制面 / DERP：出口锁定在目标 VPS 本机 ----
-domain(suffix: hs-nosla.example.top) -> tailscale-ctrl
+# 控制面域名与所在 VPS 调整后（如主控迁移）记得同步这里
+domain(suffix: hs-raksmart.example.top) -> tailscale-ctrl
 domain(suffix: hs-bitsflow.example.top) -> tailscale-derp
 
 # ---- 自建 Cloudflare Access 应用走 premium 出口 ----
@@ -36,7 +43,8 @@ domain(
 ) -> proxy
 
 # ---- fallback DoH 上游钉到跨 VPS 的 doh 组 ----
-# 不再押 premium 的单台 VPS（2026-10-30 实战修订）。
+# 不押单台 VPS；承载组应跨 VPS 且协议多样（reality+hysteria2），
+# 成员变更后同步更新这条注释，避免注释与实际分组脱节。
 # dip 打底：1.1.1.1/1.0.0.1 为 IP 形式拨号、无 SNI，domain 规则匹配不到；
 # 104.16.248.249/249 为 cloudflare-dns.com 的固定 A 记录兜底
 dip(1.1.1.1/32, 1.0.0.1/32, 104.16.248.249/32, 104.16.249.249/32) -> doh
@@ -52,3 +60,11 @@ domain(
 ) -> must_direct
 dip(198.41.192.0/24, 198.41.200.0/24) && l4proto(tcp) && dport(7844) -> must_direct
 dip(198.41.192.0/24, 198.41.200.0/24) && l4proto(udp) && dport(7844) -> must_direct
+
+# ---- Reality TCP 443 节点入口直连 ----
+# 适用于 Reality 与网站/Headscale 共用公网 IPv4 TCP 443 的部署：
+# 必须放在本文件 Headscale / Cloudflare Access 等域名规则之后——
+# 带 SNI 的流量先被上面的域名规则接走，剩余按裸 IP 直连的才是节点入口。
+# 也因此不要把 443 写进 NODE_ENDPOINTS（那会生成在文件顶部、
+# 抢在域名规则前面，把 Headscale 等同机服务一并 must_direct）。
+dip(203.0.113.10/32, 203.0.113.20/32) && l4proto(tcp) && dport(443) -> must_direct

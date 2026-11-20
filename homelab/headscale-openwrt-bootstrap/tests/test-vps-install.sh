@@ -41,7 +41,7 @@ run_vps() {
         "$VPS_SCRIPT" --root "$ROOT" "$@"
 }
 
-log_has() { grep -qF "$1" "$LOG"; }
+log_has() { grep -qF -- "$1" "$LOG"; }
 log_line_of() { grep -nF "$1" "$LOG" | head -n 1 | cut -d: -f1; }
 log_reset() { : > "$LOG"; }
 
@@ -438,5 +438,36 @@ OUT=$(f_run enable-magic-dns)
 assert_contains "$OUT" 'base_domain=tail.internal.example.com'
 assert_file_contains "$CFG" 'base_domain: "tail.internal.example.com"'
 log_has 'systemctl restart headscale' || fail 're-enable must restart after a config change'
+
+# H. The physical proxy domain and stable control domain are independent.
+# A pre-DNS TLS health check must retain SNI, verify the local address, and
+# never infer the DERP IP from the stable domain's current DNS answer.
+make_fresh_root vps-portable
+env FAKE_SS_EMPTY=1 FAKE_VPS_ROOT="$ROOT" FAKE_LOG="$LOG" PATH="$VPS_BIN:$PATH" \
+    "$VPS_SCRIPT" --root "$ROOT" --domain hs.example.com --expected-public-ip 203.0.113.10 install >/dev/null
+CFG=$ROOT/etc/headscale/config.yaml
+log_reset
+run_vps --domain hs.example.com --control-domain control.example.com \
+    --expected-public-ip 203.0.113.10 --health-resolve-ip 203.0.113.10 apply >/dev/null
+assert_file_contains "$CFG" 'server_url: https://control.example.com'
+assert_file_contains "$CFG" 'base_domain: example.com'
+assert_file_contains "$ROOT/var/lib/headscale-bootstrap/state.json" '"control_domain": "control.example.com"'
+log_has '--resolve control.example.com:443:203.0.113.10' || fail 'TLS probe did not pin the physical IP'
+log_has 'https://control.example.com/health' || fail 'TLS probe did not use the stable control domain'
+run_vps --domain hs.example.com --control-domain control.example.com \
+    --expected-public-ip 203.0.113.10 --health-resolve-ip 203.0.113.10 plan >/dev/null
+set +e
+OUT=$(run_vps --domain hs.example.com --expected-public-ip 203.0.113.10 plan 2>&1)
+CODE=$?
+set -e
+[ "$CODE" -eq 2 ] || fail 'physical domain alone must not silently replace the existing control URL'
+assert_contains "$OUT" 'existing-server-url-domain-differs'
+set +e
+OUT=$(run_vps --domain hs.example.com --control-domain control.example.com \
+    --expected-public-ip 203.0.113.10 --health-resolve-ip 203.0.113.20 plan 2>&1)
+CODE=$?
+set -e
+[ "$CODE" -ne 0 ] || fail 'mismatched pre-DNS health IP must fail closed'
+assert_contains "$OUT" 'must equal --expected-public-ip'
 
 printf 'VPS install/apply/1panel tests passed.\n'

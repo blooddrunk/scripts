@@ -41,13 +41,18 @@ DAED_UDP_CHECK_DNS="223.5.5.5:53"
 # 分流组名：必须与你在 daed 中实际创建的 Group 名称一致
 DAED_GROUP_PROXY="proxy"
 DAED_GROUP_PREMIUM="premium"
-# 自建节点 endpoint，格式 "IP:协议:端口"，空格分隔。
-# 生成规则形如: dip(IP/32) && l4proto(tcp) && dport(443) -> must_direct
+# 自建节点 endpoint，格式 "IP:协议:端口"，空格分隔。适合放独立端口的
+# 入口（如 Hysteria2 固定 UDP 口、未与网站共口的 Reality）。
+# 生成规则形如: dip(IP/32) && l4proto(udp) && dport(50757) -> must_direct
+# 与同机 Web/Headscale 共用 TCP 443 的 Reality 入口不要写在这里：
+# 本列表生成在文件顶部，会抢在域名规则前面，把同机服务一并 must_direct；
+# 此类 443 入口及 Hy2 回程 sport、mport 跳跃段统一放 routing-extra.dae 维护
+# （见 examples/routing-extra.dae.example 与 docs/principles.md）。
 # 注意：只放行节点入口端口，不要对整台 VPS /32 must_direct，
 # 否则同机部署的 1Panel/Web 等普通服务也会被强制直连。
 # 下面是 RFC 5737 / RFC 3849 文档保留地址占位符，部署前请替换为真实节点！
 # IPv6 写法示例: 2001:db8::1:tcp:443
-NODE_ENDPOINTS="203.0.113.10:tcp:443 203.0.113.10:udp:8443 198.51.100.20:tcp:8443"
+NODE_ENDPOINTS="203.0.113.10:udp:50757 198.51.100.20:udp:8443 198.51.100.20:tcp:8443"
 # 内部/私有域名（公司内网域名等），直连；geosite:private 自动追加，无需手写
 DIRECT_INTERNAL_DOMAINS="example.corp"
 # 固定走 premium 组的 geosite 名称（不含 "geosite:" 前缀）；留空则不生成该规则

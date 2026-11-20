@@ -343,6 +343,8 @@ https://raw.githubusercontent.com/blooddrunk/scripts/main/homelab/substore-opera
 
 兼容回退：节点没有 `_googleStatus` 时，检查 `_geo` 字段里的 `www.google.cn` 历史标记判断（可与 `http-meta-geo.js` 联用）。
 
+非法 `googleStatus` 值（如排障期间残留在订阅 URL 里的缓存 bust 后缀 `non-cn10`）不会让下载失败：脚本记一条错误日志并按 `all` 处理，避免单个客户端的手误把整条订阅打成 500 并触发推送报警轰炸。
+
 无论怎么过滤，它都会删除 `_geo`、`_googleStatus`、`_originServer`、`_nodeProfile`，因此**应当永远是链路的最后一个操作**。
 
 ### 可选脚本 http-meta-geo.js
@@ -479,9 +481,9 @@ daed 单次尝试硬编码 5 秒超时且不可配置。按 [VPS 生产部署](#
 
 `rulesCacheTtl`（默认 15 分钟）内有过成功缓存时，会自动降级使用 stale 缓存，并在日志记录 `rulesUrl refresh failed; using stale cache`。
 
-### 报错 `Unknown filterType` / `Unknown googleStatus`
+### 报错 `Unknown filterType` / 日志 `Unknown googleStatus ... falling back to "all"`
 
-参数值拼写错误。`filterType` 合法值：`all` / `vless` / `reality` / `hysteria2` / `hy2`；`googleStatus` 合法值：`all` / `clean` / `ok` / `non-cn` / `cn` / `china` / `unknown`。
+参数值拼写错误。`filterType` 合法值：`all` / `vless` / `reality` / `hysteria2` / `hy2`；`googleStatus` 合法值：`all` / `clean` / `ok` / `non-cn` / `cn` / `china` / `unknown`。`protocol-filter.js` 遇到非法 `filterType` 仍直接报错；`google-region-check.js` 自 2026-11-20 起对非法 `googleStatus` 只记错误日志并按 `all` 放行（历史上订阅 URL 里残留的 `non-cn10` 后缀曾把整条下载打成 500 + 推送报警）。
 
 ### 探测结果全是 `unknown`，或报 `HTTP META start failed`
 

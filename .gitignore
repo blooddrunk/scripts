@@ -40,6 +40,9 @@ homelab/headscale-openwrt-bootstrap/**/*.state
 homelab/headscale-openwrt-bootstrap/**/*.sqlite
 homelab/headscale-openwrt-bootstrap/**/*.sqlite-shm
 homelab/headscale-openwrt-bootstrap/**/*.sqlite-wal
+homelab/headscale-openwrt-bootstrap/**/*.db
+homelab/headscale-openwrt-bootstrap/**/*.db-wal
+homelab/headscale-openwrt-bootstrap/**/*.db-shm
 
 # 测试 fixture 中的假身份标记文件需要入库
 !homelab/headscale-openwrt-bootstrap/tests/fixtures/openwrt/etc/tailscale/tailscaled.state
@@ -58,6 +61,9 @@ homelab/headscale-openwrt-bootstrap/**/manifest.sha256
 # ============================================================
 
 # 测试沙箱与临时产物
+homelab/openwrt-dns-daed/**/*.db
+homelab/openwrt-dns-daed/**/*.db-wal
+homelab/openwrt-dns-daed/**/*.db-shm
 homelab/openwrt-dns-daed/tests/.sandbox/
 homelab/openwrt-dns-daed/tests/.dbg/
 
