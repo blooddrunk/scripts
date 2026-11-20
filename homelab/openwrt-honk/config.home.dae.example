@@ -173,6 +173,15 @@ routing {
     # ---- STUN 直连（LAN 客户端 + 路由器自身 NAT 穿越）----
     l4proto(udp) && dport(3478) -> direct
 
+    # ---- LAN 客户端设备的 Tailscale 直连（2026-11-21）----
+    # 路由器自身已由上方 pname(tailscaled) 覆盖；这两条保护 LAN 里运行
+    # Tailscale 的设备（PC/手机）：官方 DERP 与控制域名不再落入
+    # fallback: proxy，透明代理停摆时客户端 tailnet 兜底不受连累
+    # （公司侧 2026-11-20 停机演练教训）。full 精确匹配控制域名，
+    # 避免误伤 substore 等其它自建子域
+    domain(suffix: tailscale.com) -> direct
+    domain(full: hs.haoqi90.top) -> direct
+
     # ---- 自建节点入口精确直连（只匹配 IP+协议+端口，勿整台 VPS /32）----
     # 203.0.113.10 = raksmart、203.0.113.20 = lightlayer、203.0.113.30 = bitsflow
     dip(203.0.113.10/32) && l4proto(udp) && dport(51197) -> direct(must)

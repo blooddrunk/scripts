@@ -117,7 +117,21 @@ nosla 不订阅自动绝迹。bitsflow 入口直连规则：hy2 固定口 47625 
 - [x] LuCI/面板：doona(:9527)、zashboard(:9090) 均可用；凭据在 `/root/honk-migration-20261120/panel-credentials.txt`
 - [x] 2026-11-20 追加：DOONA native_api 改监听 `0.0.0.0:9527`（用户偏好其布局，远程 tailnet 直达 `http://192.168.100.1:9527/ui/`，password_auth 兜底）。附：自定义 config.dae 属 file-owned，`control.sh settings` 会以 `runtime_settings_owned_by_file` 拒改 runtime 字段——监听地址/密钥这类 experimental 字段直接改 config.dae + lifecycle restart 生效（热 reload 不重绑监听）
 - [x] 官方源升级：`apk update` + `apk search honk` 通过
-- [ ] 待抽查：真实 LAN 设备（手机/PC）上的 DNS 行为——ipversion_prefer:4 的 AAAA 压制、`.lan` 本地域名 asis 放行（路由器自身与 tailnet 远程路径查询走 dnsmasq，测不到 br-lan 拦截面）
+- [x] 2026-11-21 凌晨单 Tailnet 验收（经 tailnet 远程）：ControlURL=
+  hs.haoqi90.top、单 profile、BackendState Running；TSMP 到公司两路由
+  与 WORK-PC 全通（m-w-r 5ms P2P 直连 112.17.79.157:41641）；
+  **DERP 999 握手成功**（netcheck 中 raksmart 区无 STUN 延迟=已知
+  回程丢包，官方 Tokyo 兜底）；tailscale-core init 无 passwall2 遗留
+  env；watchdog UCI 残段已删（enabled 本就为 0）
+- [x] 2026-11-21 调优：新增 **LAN 客户端 Tailscale 直连规则**
+  （`domain(suffix: tailscale.com) -> direct` +
+  `domain(full: hs.haoqi90.top) -> direct`，validate+reload 实证，
+  路由器自身仍由 pname 规则覆盖）——对齐公司侧"透明代理停摆时
+  tailnet 兜底不受连累"的教训
+- [ ] 待抽查（需人在家）：真实 LAN 设备（手机/PC）上的 DNS 行为——
+  ipversion_prefer:4 的 AAAA 压制、`.lan` 本地域名 asis 放行、以及
+  LAN 客户端 Tailscale 的 direct 表现与 honk 停机容忍（步骤见
+  [LAN-RUNBOOK.md](LAN-RUNBOOK.md)）
 - [ ] 次日观察：无 passwall2 凌晨复活（cron 已中和）
 
 ## 已知观察（2026-11-20）

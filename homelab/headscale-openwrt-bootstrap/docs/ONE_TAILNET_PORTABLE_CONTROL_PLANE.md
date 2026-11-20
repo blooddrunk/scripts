@@ -1,6 +1,6 @@
 # 单 Tailnet / 可迁移 Headscale 控制平面：两轮实施计划
 
-状态：**主体完成——双向提升演练与公司侧验收已过，旧控制域名 hs-raksmart/hs-bitsflow 已于 2026-11-21 退役，router-home 调优与离线设备待办**
+状态：**主体完成——双向提升演练、三台路由器验收与旧域名退役均已过；离线设备待用户择机加入**
 制定日期：2026-11-20  
 仓库：blooddrunk/scripts  
 权威网络：Raksmart 现有 Headscale 数据与节点；Bitsflow 现有 Headscale 作为独立旧网络，仅供过渡与归档  
@@ -145,13 +145,16 @@ Agent 可通过已有 SSH 配置访问 Raksmart、Bitsflow、公司 daed 路由�
 ## 6. Coding agent 交付清单
 
 - [x] 修改 bootstrap，使固定 control URL 与 VPS 的物理 host/IP、DERP 及预切换健康检查解耦，保留旧脚本模式兼容。
-- [ ] 可复用的 DR snapshot/prepare/promote/rollback 工具、短操作手册与备份 manifest；避免重复建设整套服务管理框架。
-- [x] 一次将现有 Raksmart 数据作为权威网络的迁移，单一 https://hs.haoqi90.top 控制入口与 1Panel TLS，保留旧域名兼容路径。
+- [x] 可复用的 DR snapshot/prepare/promote/rollback 工具、短操作手册与备份 manifest；避免重复建设整套服务管理框架（headscale-dr.py + headscale-promote.py，双向演练与无 legacy preflight 均实证）。
+- [x] 一次将现有 Raksmart 数据作为权威网络的迁移，单一 https://hs.haoqi90.top 控制入口与 1Panel TLS，保留旧域名兼容路径（兼容路径已于 2026-11-21 随客户端清点完毕退役）。
 - [x] 公司 daed 路由器两台的规则/状态与新 URL 同步（2026-11-20 深夜
-  验收：独立恢复演练通过、raksmart /32 MTU、官方 DERP 直连规则落地）；
-  家庭路由器侧的测试与调优仍待执行（honk，Passwall2 已停用）。
+  验收：独立恢复演练通过、raksmart /32 MTU、官方 DERP 直连规则落地）。
+  家庭路由器（honk，Passwall2 已停用）亦于 2026-11-21 凌晨验收：TSMP
+  矩阵全通、DERP 999 握手成功、LAN 客户端 Tailscale 直连规则落地
+  （ops-log-2026-11 事件十一；LAN 物理设备抽查见
+  openwrt-honk/LAN-RUNBOOK.md）。
 - [x] Active Headplane Native 基础管理入口，Standby 侧准备过程不主动提供第二个可写 UI。
-- [ ] Raksmart -> Bitsflow 受控提升演练、关键 smoke 和可复用回退方式；最终仅一个活动 Tailnet。
+- [x] Raksmart -> Bitsflow 受控提升演练、关键 smoke 和可复用回退方式；最终仅一个活动 Tailnet（2026-11-20 晚双向演练：提升 21:24、切回 21:27，身份/节点/路由全程一致）。
 - [x] 更新本目录 README 和 ../../openwrt-dns-daed/README.md 中涉及固定旧控制域名、多 profile、daed 锁出口与敏感备份的文档（2026-11-20 深夜完成，含新增[快速开始](ONE_TAILNET_QUICKSTART.md)与废弃文档清理）。
 - [ ] 输出：实际运行结果、遗留人工步骤（若有）、如何在**下一次换 VPS**时仅在服务端执行一次 promote。
 

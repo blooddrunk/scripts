@@ -1,6 +1,11 @@
 # 单 Tailnet 迁移执行记录：2026-11-20
 
-**2026-11-21 凌晨：hs-raksmart / hs-bitsflow 旧控制域名已全部退役**
+**2026-11-21 凌晨（二）：router-home 验收与调优完成（经 tailnet 远程）**
+——TSMP 矩阵全通、DERP 999 握手成功、LAN 客户端 Tailscale 直连规则
+落地；LAN 物理设备抽查留给用户（openwrt-honk/LAN-RUNBOOK.md）。
+见 ops-log-2026-11 事件十一。至此单 Tailnet 三台路由器全部验收。
+
+**2026-11-21 凌晨（一）：hs-raksmart / hs-bitsflow 旧控制域名已全部退役**
 （客户端清点完毕后，两台 VPS 的 1Panel 站点+证书、Cloudflare 记录、
 两台公司路由器 daed 规则一并移除；promote 工具链的 legacy 参数改为
 可选，无 legacy 的 `--preflight-only` 已跑通）。详见
