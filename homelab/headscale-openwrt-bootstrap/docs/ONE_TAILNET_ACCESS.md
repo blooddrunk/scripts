@@ -44,27 +44,46 @@ ssh -J bitsflow raksmart 'headscale apikeys create --expiration 2h'
 用途不同。不要在聊天或仓库中暴露任一种密钥。曾实际验证短期 API key
 登录及节点列表；高级配置写入和浏览器 SSH 未开放。
 
-## 1Panel、证书和现存限制
+## 1Panel、证书和现状（2026-11-20 起双机纳管）
 
-该站点是直接写入 1Panel OpenResty 使用的文件，而非通过 1Panel 网站或
-证书功能创建。现场只读检查时，1Panel `agent.db` 的 `websites`、
-`website_domains`、`website_ssls` 均无此域名记录，因此面板列表不会
-显示对应网站或证书。OpenResty 容器采用 host 网络，主机上的
-`/opt/1panel/www` 挂载到容器内 `/www`；主要文件为：
+hs.haoqi90.top 的站点与证书已在两台 VPS 纳入 1Panel 管理（面板可见、
+证书自动续期），同时保留公网 IPv4 443 的 Xray 分流与回落（OpenResty
+仅监听回环 8443）。要点：
+
+- raksmart（Active）：website id=8、证书 id=10；bitsflow（Standby）：
+  website id=5、证书 id=6。两证书均为 CF DNS-01 独立签发、
+  `auto_renew=1`，到期 2027-02-18。双机各自续期，无需互拷证书。
+- 站点 conf 仍为手工维护的 8443 版本（面板仅登记，不负责写 conf）；
+  续期时面板只重写 `sites/<域名>/ssl/*.pem` 并 reload。
+- **不要在 1Panel 面板编辑该站点的反代/HTTPS 配置**：面板重写会丢失
+  `listen 127.0.0.1:8443`、长超时与 `/admin/` 转发，进而与 Xray 抢
+  443。proxy 文件以 DR 工具（`dr-activate-vps.py`）模板为准。
+- bitsflow 侧 root.conf 为备机语义 `location ^~ / { return 503; }`，
+  提升时由 DR 工具改写；headscale 保持 masked。
+- 变更前完整备份（含旧 acme.sh 证书）：两机 `/root/1panel-import-20261120T1122/112333Z`；
+  执行脚本 `/root/hs1panel_*.sh`。操作细节与 O_EXCL 建站坑见
+  ops-log-2026-11.md 事件七。
+
+主要文件（两机相同布局）：
 
 - `/opt/1panel/www/conf.d/hs.haoqi90.top.conf`
 - `/opt/1panel/www/sites/hs.haoqi90.top/proxy/root.conf`
-- `/opt/1panel/www/sites/hs.haoqi90.top/proxy/headplane.conf`
+- `/opt/1panel/www/sites/hs.haoqi90.top/proxy/headplane.conf`（仅 raksmart）
 - `/opt/1panel/www/sites/hs.haoqi90.top/ssl/fullchain.pem`
 - `/opt/1panel/www/sites/hs.haoqi90.top/ssl/privkey.pem`
 
-现有公网 IPv4 443 经 Xray 分流到 OpenResty 的回环 8443；OpenResty
-按路径分别转发 Headscale 和 Headplane。证书使用运维端 `acme.sh`、
-Cloudflare DNS-01 签发，再安全复制到两台服务器对应目录；不是由
-1Panel 申请或托管。**尚无已验证的自动续期和双机部署**，现有证书于
-2027-02-18 10:19:55（台北时间）到期。ACME 和 DNS 凭据仅保存在运维端
-受限目录，不要将证书私钥或凭据放入 Git。
+## 公司网络访问 /admin/ 受阻（2026-11-20 实测）
 
-该做法未满足面板可见、可管理的目标。后续应先设计保留既有 443/Xray
-入口和回退的迁移，再将网站与证书安全纳入 1Panel 管理；不要直接在
-面板重复创建同域名站点，以免与现有 OpenResty 配置冲突。
+公司 WORK-PC 所在网络经 daed 透明接管后，控制域名 443 的 TLS 建连被
+立即掐断（curl 000/unexpected EOF，50ms 内），旧域名同样；服务器本机
+与跨机公网 443 均 200——即 11-20 已记录的 `tailscale-ctrl` 出口组
+候选不可用问题，与本次 1Panel 变更无关。在公司网络的临时访问方式：
+
+```sh
+ssh -J bitsflow -N -L 19443:127.0.0.1:8443 raksmart   # 保持运行
+# 另一终端（或把 hosts 指到 127.0.0.1 后用浏览器开 19443 端口）
+curl -k --resolve hs.haoqi90.top:19443:127.0.0.1 https://hs.haoqi90.top:8443/health
+```
+
+Headplane 登录仍需短期 API key（见上文）。修复 daed 出口组前不要从
+公司网络依赖浏览器直开 /admin/；路由器侧改动须先保障管理通道。
