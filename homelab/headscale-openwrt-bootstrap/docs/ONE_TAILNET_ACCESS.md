@@ -72,18 +72,18 @@ hs.haoqi90.top 的站点与证书已在两台 VPS 纳入 1Panel 管理（面板�
 - `/opt/1panel/www/sites/hs.haoqi90.top/ssl/fullchain.pem`
 - `/opt/1panel/www/sites/hs.haoqi90.top/ssl/privkey.pem`
 
-## 公司网络访问 /admin/ 受阻（2026-11-20 实测）
+## 公司网络访问 /admin/（2026-11-20 已修复）
 
-公司 WORK-PC 所在网络经 daed 透明接管后，控制域名 443 的 TLS 建连被
-立即掐断（curl 000/unexpected EOF，50ms 内），旧域名同样；服务器本机
-与跨机公网 443 均 200——即 11-20 已记录的 `tailscale-ctrl` 出口组
-候选不可用问题，与本次 1Panel 变更无关。在公司网络的临时访问方式：
+当日曾因 m-w-r daed `tailscale-ctrl` 出口组两个 HY2 候选同时失活，
+控制域名（含 /admin/）新建 TLS 全被掐（curl 000）。已通过 GraphQL
+热加载重组出口组修复（见 ops-log-2026-11.md 事件八），浏览器现可
+直开 <https://hs.haoqi90.top/admin/>；Headplane 登录仍需短期 API key
+（见上文）。若再遇同类故障，备用通道：
 
 ```sh
 ssh -J bitsflow -N -L 19443:127.0.0.1:8443 raksmart   # 保持运行
-# 另一终端（或把 hosts 指到 127.0.0.1 后用浏览器开 19443 端口）
-curl -k --resolve hs.haoqi90.top:19443:127.0.0.1 https://hs.haoqi90.top:8443/health
+# hosts 加 127.0.0.1 hs.haoqi90.top 后浏览器开 19443 端口
 ```
 
-Headplane 登录仍需短期 API key（见上文）。修复 daed 出口组前不要从
-公司网络依赖浏览器直开 /admin/；路由器侧改动须先保障管理通道。
+WORK-PC 已于同日迁移 ControlURL 至 `https://hs.haoqi90.top`
+（NodeID/IP 不变）。qi 路由器侧同类出口组问题待修。
