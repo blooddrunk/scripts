@@ -193,7 +193,7 @@ vps_render_config() {
         }
     fi
     awk \
-        -v server_url="https://$VPS_EFFECTIVE_DOMAIN" \
+        -v server_url="https://$VPS_EFFECTIVE_CONTROL_DOMAIN" \
         -v listen_addr="$VPS_LISTEN" \
         -v metrics_addr="$VPS_METRICS_LISTEN" \
         -v grpc_addr="$VPS_GRPC_LISTEN" \
@@ -436,8 +436,8 @@ vps_wait_local_health() {
 }
 
 vps_public_health_ok() {
-    [ -n "$VPS_EFFECTIVE_DOMAIN" ] || return 1
-    [ "$(vps_health_code "https://$VPS_EFFECTIVE_DOMAIN/health")" = 200 ]
+    [ -n "$VPS_EFFECTIVE_CONTROL_DOMAIN" ] || return 1
+    [ "$(vps_control_health_code)" = 200 ]
 }
 
 vps_derp_fix_key_ownership() {
@@ -497,6 +497,7 @@ vps_write_state() {
     vps_ws_region=$(bootstrap_yaml_triple_scalar "$VPS_CONFIG_PATH" derp server region_code)
     state_write "$(state_path_vps)" \
         domain "$VPS_EFFECTIVE_DOMAIN" \
+        control_domain "$VPS_EFFECTIVE_CONTROL_DOMAIN" \
         proxy_mode "$VPS_EFFECTIVE_PROXY" \
         headscale_version "$(vps_current_version)" \
         listen "$VPS_LISTEN" \
@@ -634,7 +635,7 @@ vps_apply() {
     esac
 
     if [ "$VPS_EFFECTIVE_PROXY" != none ] && ! vps_public_health_ok; then
-        die "public https://$VPS_EFFECTIVE_DOMAIN/health did not return 200 after proxy apply"
+        die "public https://$VPS_EFFECTIVE_CONTROL_DOMAIN/health did not return 200 after proxy apply"
     fi
     printf 'Apply complete: config verified, proxy=%s, health OK.\n' "$VPS_EFFECTIVE_PROXY"
     vps_write_state
@@ -730,14 +731,14 @@ vps_magic_dns_base_domain_resolve() {
     vps_md_domain=$VPS_MAGIC_DNS_BASE_DOMAIN_FLAG
     [ -n "$vps_md_domain" ] || vps_md_domain=$VPS_MAGIC_DNS_BASE_DOMAIN_EFFECTIVE
     if [ -z "$vps_md_domain" ] || [ "$vps_md_domain" = example.com ]; then
-        [ -n "$VPS_EFFECTIVE_DOMAIN" ] || die 'cannot derive a MagicDNS base domain: pass --base-domain (and --domain when the config is unreadable)'
-        vps_md_domain="ts.$VPS_EFFECTIVE_DOMAIN"
+        [ -n "$VPS_EFFECTIVE_CONTROL_DOMAIN" ] || die 'cannot derive a MagicDNS base domain: pass --base-domain (and --control-domain when the config is unreadable)'
+        vps_md_domain="ts.$VPS_EFFECTIVE_CONTROL_DOMAIN"
     fi
     case "$vps_md_domain" in
         *[!A-Za-z0-9.-]*|.*|*.|*..*) die "invalid MagicDNS base domain: $vps_md_domain" ;;
     esac
-    [ "$vps_md_domain" != "$VPS_EFFECTIVE_DOMAIN" ] || {
-        die "the MagicDNS base domain must differ from the server_url domain ($VPS_EFFECTIVE_DOMAIN); use a dedicated subdomain such as ts.$VPS_EFFECTIVE_DOMAIN"
+    [ "$vps_md_domain" != "$VPS_EFFECTIVE_CONTROL_DOMAIN" ] || {
+        die "the MagicDNS base domain must differ from the server_url domain ($VPS_EFFECTIVE_CONTROL_DOMAIN); use a dedicated subdomain such as ts.$VPS_EFFECTIVE_CONTROL_DOMAIN"
     }
     printf '%s\n' "$vps_md_domain"
 }

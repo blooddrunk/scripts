@@ -23,6 +23,8 @@ VPS_PROGRAM=headscale-vps.sh
 VPS_COMMAND=
 VPS_POSITIONAL=
 VPS_DOMAIN=
+VPS_CONTROL_DOMAIN=
+VPS_HEALTH_RESOLVE_IP=
 VPS_VERSION=
 VPS_PROXY_MODE=auto
 VPS_USER_NAME=
@@ -88,6 +90,10 @@ Mutating commands (each backs up before writing, validates, then verifies):
 
 Options:
   --domain DOMAIN
+  --control-domain DOMAIN   Stable Headscale server_url hostname; --domain
+                           remains the physical host's existing proxy/DNS name.
+  --health-resolve-ip IP    Probe the stable domain on this VPS before DNS
+                           moves; must equal --expected-public-ip.
   --version VERSION|latest
   --proxy auto|1panel|caddy|nginx|none
   --user USER
@@ -165,6 +171,18 @@ vps_parse_args() {
                 shift 2
                 ;;
             --domain=*) VPS_DOMAIN=${1#*=}; shift ;;
+            --control-domain)
+                vps_need_value "$@"
+                VPS_CONTROL_DOMAIN=$2
+                shift 2
+                ;;
+            --control-domain=*) VPS_CONTROL_DOMAIN=${1#*=}; shift ;;
+            --health-resolve-ip)
+                vps_need_value "$@"
+                VPS_HEALTH_RESOLVE_IP=$2
+                shift 2
+                ;;
+            --health-resolve-ip=*) VPS_HEALTH_RESOLVE_IP=${1#*=}; shift ;;
             --version)
                 vps_need_value "$@"
                 VPS_VERSION=$2
@@ -292,6 +310,11 @@ vps_parse_args() {
     [ -n "$VPS_COMMAND" ] || { vps_usage >&2; exit 2; }
     vps_validate_proxy
     vps_validate_backup_dir
+    if [ -n "$VPS_HEALTH_RESOLVE_IP" ]; then
+        net_is_ipv4 "$VPS_HEALTH_RESOLVE_IP" || die '--health-resolve-ip must be IPv4'
+        [ -n "$VPS_EXPECTED_PUBLIC_IP" ] && [ "$VPS_HEALTH_RESOLVE_IP" = "$VPS_EXPECTED_PUBLIC_IP" ] || \
+            die '--health-resolve-ip must equal --expected-public-ip'
+    fi
     BOOTSTRAP_ROOT=$(bootstrap_normalize_root "$BOOTSTRAP_ROOT") || die "--root is not an accessible directory"
 }
 
@@ -559,6 +582,7 @@ vps_collect_facts() {
     VPS_DETECTED_DOMAIN=
     [ "$VPS_CURRENT_SERVER_URL" != unknown ] && VPS_DETECTED_DOMAIN=$(vps_extract_domain_from_url "$VPS_CURRENT_SERVER_URL")
     VPS_EFFECTIVE_DOMAIN=${VPS_DOMAIN:-$VPS_DETECTED_DOMAIN}
+    VPS_EFFECTIVE_CONTROL_DOMAIN=${VPS_CONTROL_DOMAIN:-$VPS_EFFECTIVE_DOMAIN}
 
     VPS_CURRENT_MAGIC_DNS=
     VPS_CURRENT_BASE_DOMAIN=
@@ -753,6 +777,7 @@ vps_print_text_discover() {
         "$VPS_CURRENT_OVERRIDE_LOCAL_DNS" "${VPS_CURRENT_GLOBAL_DNS:-none}"
     printf '  MagicDNS intent (state.json): %s\n' "$VPS_MAGIC_DNS_EFFECTIVE"
     printf '  effective domain: %s\n' "${VPS_EFFECTIVE_DOMAIN:-unknown}"
+    printf '  control domain: %s; health resolve IP: %s\n' "${VPS_EFFECTIVE_CONTROL_DOMAIN:-unknown}" "${VPS_HEALTH_RESOLVE_IP:-DNS}"
     printf '  DNS: %s; match=%s; addresses=%s\n' "$VPS_DNS_STATUS" "$VPS_DNS_MATCH" "${VPS_DNS_IPS:-none}"
     printf '  listeners 80/443: %s/%s\n' "$VPS_PORT_80" "$VPS_PORT_443"
     printf '  listeners 8080/9090/50443: %s/%s/%s\n' "$VPS_PORT_8080" "$VPS_PORT_9090" "$VPS_PORT_50443"
@@ -796,6 +821,8 @@ vps_print_json_discover() {
     bootstrap_json_field dns_global_resolvers "${VPS_CURRENT_GLOBAL_DNS:-}"
     bootstrap_json_field magic_dns_intent "$VPS_MAGIC_DNS_EFFECTIVE"
     bootstrap_json_field domain "${VPS_EFFECTIVE_DOMAIN:-unknown}"
+    bootstrap_json_field control_domain "${VPS_EFFECTIVE_CONTROL_DOMAIN:-unknown}"
+    bootstrap_json_field health_resolve_ip "${VPS_HEALTH_RESOLVE_IP:-}"
     bootstrap_json_field dns_status "$VPS_DNS_STATUS"
     bootstrap_json_field dns_match "$VPS_DNS_MATCH"
     bootstrap_json_field dns_addresses "${VPS_DNS_IPS:-none}"
@@ -848,7 +875,7 @@ vps_compute_conflicts() {
         127.0.0.1|localhost|::1) vps_conflicts_loopback_baseline=true ;;
         *) vps_conflicts_loopback_baseline=false ;;
     esac
-    if [ "$VPS_CONFIG_PRESENT" = yes ] && [ "$vps_conflicts_loopback_baseline" = false ] && [ -n "$VPS_DOMAIN" ] && [ -n "$VPS_DETECTED_DOMAIN" ] && [ "$VPS_DOMAIN" != "$VPS_DETECTED_DOMAIN" ]; then
+    if [ "$VPS_CONFIG_PRESENT" = yes ] && [ "$vps_conflicts_loopback_baseline" = false ] && [ -n "$VPS_DOMAIN" ] && [ -n "$VPS_DETECTED_DOMAIN" ] && [ "$VPS_DOMAIN" != "$VPS_DETECTED_DOMAIN" ] && { [ -z "$VPS_CONTROL_DOMAIN" ] || [ "$VPS_CONTROL_DOMAIN" != "$VPS_DETECTED_DOMAIN" ]; }; then
         vps_plan_blocked=1
         vps_block_reasons="$vps_block_reasons existing-server-url-domain-differs"
     fi
@@ -868,9 +895,26 @@ vps_compute_conflicts() {
             fi
             ;;
     esac
+    case "$VPS_EFFECTIVE_CONTROL_DOMAIN" in
+        ''|*[!A-Za-z0-9.-]*|.*|*.)
+            vps_plan_blocked=1
+            vps_block_reasons="$vps_block_reasons invalid-control-domain"
+            ;;
+    esac
+    if [ "$VPS_CURRENT_MAGIC_DNS" = true ] && [ "$VPS_CURRENT_BASE_DOMAIN" = "$VPS_EFFECTIVE_CONTROL_DOMAIN" ]; then
+        vps_plan_blocked=1
+        vps_block_reasons="$vps_block_reasons control-domain-conflicts-with-magic-dns"
+    fi
     if [ "$VPS_DNS_STATUS" != resolved ] || [ "$VPS_DNS_MATCH" != match ]; then
         vps_plan_blocked=1
         vps_block_reasons="$vps_block_reasons dns-not-confirmed-or-proxied"
+    fi
+    if [ -n "$VPS_HEALTH_RESOLVE_IP" ]; then
+        vps_resolve_local_ips=$(ip -o addr show scope global 2>/dev/null | awk '$3 == "inet" {split($4, a, "/"); print a[1]}')
+        if ! printf '%s\n' "$vps_resolve_local_ips" | grep -qxF "$VPS_HEALTH_RESOLVE_IP"; then
+            vps_plan_blocked=1
+            vps_block_reasons="$vps_block_reasons health-resolve-ip-not-local"
+        fi
     fi
     if [ "$VPS_EFFECTIVE_PROXY" = unknown ]; then
         vps_plan_blocked=1
@@ -932,6 +976,7 @@ vps_plan() {
         bootstrap_json_field command plan
         bootstrap_json_field effective_proxy "$VPS_EFFECTIVE_PROXY"
         bootstrap_json_field domain "${VPS_EFFECTIVE_DOMAIN:-unknown}"
+        bootstrap_json_field control_domain "${VPS_EFFECTIVE_CONTROL_DOMAIN:-unknown}"
         bootstrap_json_field requested_version "${VPS_VERSION:-none}"
         bootstrap_json_field requested_embedded_derp "$VPS_ENABLE_DERP"
         bootstrap_json_field effective_embedded_derp "$VPS_DERP_EFFECTIVE"
@@ -947,6 +992,7 @@ vps_plan() {
         printf 'Headscale VPS plan (read-only; no changes made)\n'
         printf 'Detected:\n'
         printf '  domain: %s\n' "${VPS_EFFECTIVE_DOMAIN:-unknown}"
+        printf '  control domain: %s\n' "${VPS_EFFECTIVE_CONTROL_DOMAIN:-unknown}"
         printf '  proxy requested/effective: %s/%s\n' "$VPS_PROXY_MODE" "$VPS_EFFECTIVE_PROXY"
         printf '  requested version/embedded DERP: %s/%s (effective)\n' "${VPS_VERSION:-none}" "$VPS_DERP_EFFECTIVE"
         printf '  MagicDNS intent/base_domain: %s / %s\n' "$VPS_MAGIC_DNS_EFFECTIVE" "${VPS_MAGIC_DNS_BASE_DOMAIN_EFFECTIVE:-n/a}"
@@ -1017,6 +1063,20 @@ vps_health_code() {
     esac
 }
 
+vps_control_health_code() {
+    [ -n "$VPS_EFFECTIVE_CONTROL_DOMAIN" ] || { printf 'failed\n'; return; }
+    if [ -z "$VPS_HEALTH_RESOLVE_IP" ]; then
+        vps_health_code "https://$VPS_EFFECTIVE_CONTROL_DOMAIN/health"
+        return
+    fi
+    if ! bootstrap_command_exists curl; then printf 'unavailable\n'; return; fi
+    vps_ch_result=$(curl --silent --show-error --max-time 5 --noproxy '*' \
+        --resolve "$VPS_EFFECTIVE_CONTROL_DOMAIN:443:$VPS_HEALTH_RESOLVE_IP" \
+        --output /dev/null --write-out '%{http_code}' \
+        "https://$VPS_EFFECTIVE_CONTROL_DOMAIN/health" 2>/dev/null)
+    case "$vps_ch_result" in '') printf 'failed\n' ;; *) printf '%s\n' "$vps_ch_result" ;; esac
+}
+
 vps_status() {
     vps_collect_facts
     vps_safe_config_state
@@ -1027,7 +1087,7 @@ vps_status() {
         VPS_LOCAL_HEALTH=$(vps_health_code "http://$VPS_CURRENT_LISTEN/health")
     fi
     if [ -n "$VPS_EFFECTIVE_DOMAIN" ]; then
-        VPS_PUBLIC_HEALTH=$(vps_health_code "https://$VPS_EFFECTIVE_DOMAIN/health")
+        VPS_PUBLIC_HEALTH=$(vps_control_health_code)
     fi
 
     VPS_STATUS_CODE=0

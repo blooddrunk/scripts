@@ -178,6 +178,12 @@ SNAT）、不创建 `network.tailscale`、不 reload network、不
 
 ## 多 profile 与故障切换（OpenWrt 端）
 
+单 Tailnet 部署不需要下面的跨网络 watchdog：客户端只保留稳定
+`login-server`，服务器提升时由 DNS 切换。先验证并加密备份现有状态，
+再用 `single-tailnet-router.py` 收敛 profile；它只删除非活动 profile，
+不会删除 `tailscaled.state`。以下功能仍保留用于确有多个独立网络的
+旧部署。家庭路由器当前使用 honk；用户确认 Passwall2 保持停用。
+
 远程只能通过 tailnet 访问的路由器有一个现实风险：控制服务器一挂，
 人就再也无法远程登录路由器去手动换网。profile 列表 + failover 守护
 进程就是为这个场景准备的——它仍然**不会同时连接两个网络**（官方客户端
@@ -539,14 +545,26 @@ ACL 里按源节点收窄可见的 dst 网段（不给它下发自家网段）�
 cd /var/backups/headscale-bootstrap/<timestamp> && sudo sha256sum -c manifest.sha256
 ```
 
-备份属于敏感运维数据，请保持在 Git 之外（`.gitignore` 已覆盖常见敏感
-文件名；唯一例外是测试用的假身份 fixture，按精确路径放行）。
+备份、设备配置、身份状态、密钥和访问令牌均不得提交到 Git，包括加密
+归档；应保存在权限受限的独立存储中，并将解密凭据另行保管。
+`.gitignore` 只是额外防线，不代替提交前检查。仓库中的精确放行项仅限
+测试用假身份 fixture。
 
-**例外中的例外**：`backups/<设备>/` 下**人工归档**的关键配置快照
-（含真实节点凭据与主机密码，供灾后恢复用）是刻意提交进仓库的，
-`.gitignore` 对该层放行——因此**本仓库必须保持私有**。首个快照：
-[backups/gl-mt3600be/20261027-selfcarry/](backups/gl-mt3600be/20261027-selfcarry/)
-（gl 路由器自持架构改造，含恢复/回滚/验证命令组与主机凭据表）。
+上面的旧 `backup` 命令用于本机回退，在线复制 SQLite 时不能作为一致性
+灾备恢复集。`headscale-dr.py snapshot` 使用 SQLite Online Backup API，
+通过 SSH 将快照流加密到运维端，并在保存前验证归档、清单与 SQLite；
+`snapshot-router` 对 OpenWrt 身份及 daed SQLite 采用同样的保护。操作
+说明和已完成的现场验证见
+[单 Tailnet 迁移计划](docs/ONE_TAILNET_PORTABLE_CONTROL_PLANE.md)。
+
+`headscale-promote.py` 仍需完整现场验收：第一次实际提升未通过旧域名
+转发检查，随后已安全回退；家庭路由器 WireGuard/SSH 尚未恢复，当前
+禁止再次提升。工具只供人工触发：先验证隔离恢复并持久封锁旧写入者，
+再恢复目标、切换 DNS 并验证客户端；如果目标可能已经写入，回退必须先
+封锁目标并从它的新快照恢复，无法验证目标封锁时不会重启旧主。
+`--preflight-only` 不停止服务；`HEADSCALE_DR_SSH_CONFIG` 可指定含跳板的
+私有 SSH 配置。自动选主、自动证书续期和定时快照尚未实现，不能把手工
+快照描述为持续复制。
 
 ## 状态文件
 

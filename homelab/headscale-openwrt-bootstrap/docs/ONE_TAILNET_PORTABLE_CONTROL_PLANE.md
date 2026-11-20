@@ -1,10 +1,14 @@
 # 单 Tailnet / 可迁移 Headscale 控制平面：两轮实施计划
 
-状态：**待 coding agent 实施；尚未修改线上 VPS、DNS 或路由器**  
+状态：**实施中；受控提升失败后已回退，家庭路由器管理通道待恢复**
 制定日期：2026-11-20  
 仓库：blooddrunk/scripts  
 权威网络：Raksmart 现有 Headscale 数据与节点；Bitsflow 现有 Headscale 作为独立旧网络，仅供过渡与归档  
 目标控制地址：**https://hs.haoqi90.top**（长期固定，与任何 VPS 主机名解耦）
+
+2026-11-20 的实际变更、回退、未解决事项和操作证据见
+[执行记录](ONE_TAILNET_2026-11-20_EXECUTION.md)。以下为原计划，不能将
+计划中的目标视为已经全部验收。
 
 ## 0. 先明确保证范围
 
@@ -139,11 +143,11 @@ Agent 可通过已有 SSH 配置访问 Raksmart、Bitsflow、公司 daed 路由�
 
 ## 6. Coding agent 交付清单
 
-- [ ] 修改 bootstrap，使固定 control URL 与 VPS 的物理 host/IP、DERP 及预切换健康检查解耦，保留旧脚本模式兼容。
+- [x] 修改 bootstrap，使固定 control URL 与 VPS 的物理 host/IP、DERP 及预切换健康检查解耦，保留旧脚本模式兼容。
 - [ ] 可复用的 DR snapshot/prepare/promote/rollback 工具、短操作手册与备份 manifest；避免重复建设整套服务管理框架。
-- [ ] 一次将现有 Raksmart 数据作为权威网络的迁移，单一 https://hs.haoqi90.top 控制入口与 1Panel TLS，保留旧域名兼容路径。
+- [x] 一次将现有 Raksmart 数据作为权威网络的迁移，单一 https://hs.haoqi90.top 控制入口与 1Panel TLS，保留旧域名兼容路径。
 - [ ] 公司 daed 路由器两台 + 家庭 Passwall2 路由器的规则/状态与新 URL 同步；停用旧双 Tailnet watchdog，避免丢失 SSH 管理通道。
-- [ ] Active Headplane Native 基础管理入口，Standby 侧准备过程不主动提供第二个可写 UI。
+- [x] Active Headplane Native 基础管理入口，Standby 侧准备过程不主动提供第二个可写 UI。
 - [ ] Raksmart -> Bitsflow 受控提升演练、关键 smoke 和可复用回退方式；最终仅一个活动 Tailnet。
 - [ ] 更新本目录 README 和 ../../openwrt-dns-daed/README.md 中涉及固定旧控制域名、多 profile、daed 锁出口与敏感备份的文档。
 - [ ] 输出：实际运行结果、遗留人工步骤（若有）、如何在**下一次换 VPS**时仅在服务端执行一次 promote。

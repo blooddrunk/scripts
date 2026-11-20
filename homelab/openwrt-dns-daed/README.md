@@ -361,6 +361,19 @@ dip(203.0.113.99/32) && l4proto(tcp) && dport(8443) -> must_direct
 
 ### 自建 Headscale 场景：控制面/DERP 域名按出口位置定向（2026-10-27 实战）
 
+> **2026-11-20 单 Tailnet 更新**：固定控制域名 `hs.haoqi90.top` 的
+> `tailscale-ctrl` 应包含来自不同 VPS/订阅的至少两个可用 HY2 出口，
+> 不再永久锁定某一台 VPS。旧控制域名规则在旧客户端清点完成前保留；
+> `DAED_DNS_SELF_DOMAINS=haoqi90.top` 继续使用独立的 AliDNS 解析，
+> UDP/3478 STUN 直连规则单独保留。下面的双域名锁出口方案是历史
+> 多网络示例，不是当前稳定域名的推荐配置。
+>
+> daed 承载运维终端的网络时，即使有延时启动脚本也不能假设它能无人
+> 恢复。`one-tailnet-control.py` 只有在操作者已验证**不依赖该 daed**
+> 的管理和恢复路径，并显式传入 `--independent-access-verified` 后才
+> 允许重启；不要裸停服务。现场发生过一次需要人工启动的中断，不能
+> 把那次事件当作无人恢复成功的证据。
+
 路由器同时是自建 headscale tailnet 的节点时，`tailscaled` 的控制面
 （`https://<login-server>/`）与 DERP 中继（`:443`）流量默认命中
 `fallback: proxy`，**走哪个节点完全由分组的延迟策略决定**。实测问题：
