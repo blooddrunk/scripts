@@ -35,6 +35,14 @@ printf '2: eth0 inet %s/24 scope global eth0\n' "$TEST_IP"
 EOF
 cat >"$work/bin/curl" <<'EOF'
 #!/bin/sh
+for arg do
+  if [ "$arg" = "https://$TEST_LEGACY/health" ]; then
+    if grep -q 'return 503' "/opt/1panel/www/sites/$TEST_LEGACY/proxy/root.conf"; then
+      printf 503
+      exit 0
+    fi
+  fi
+done
 printf 200
 EOF
 cat >"$work/bin/headscale" <<'EOF'

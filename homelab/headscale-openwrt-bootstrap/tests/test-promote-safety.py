@@ -45,7 +45,8 @@ class PromotionSafety(unittest.TestCase):
             target_ip='192.0.2.2', domain='hs.example.test', source_legacy='old.example.test',
             target_legacy='new.example.test', cf_zone='example.test', cf_token_file=root / 'token',
             passphrase_file=root / 'passphrase', backup_dir=root / 'backups', routers=['router'],
-            preflight_only=False, probes=['router=100.64.0.1'])
+            preflight_only=False, probes=['router=100.64.0.1'],
+            source_legacy_mode='local', target_legacy_mode='blocked')
         self.events = []
         self.fail_target = False
         self.target_phase = 'writer-may-have-started'
@@ -96,10 +97,12 @@ class PromotionSafety(unittest.TestCase):
             return {'headscale_enabled': 'masked', 'headscale_active': 'inactive', 'sealed': action in ('seal', 'status')}
         if path == promote.ACTIVATE:
             self.events.append(('activate', host))
+            self.events.append(('legacy-mode', host, args[-1]))
             if host == 'new' and self.fail_target:
                 raise RuntimeError('activation response lost')
             return {'phase': 'active'}
         self.events.append(('relay', host))
+        self.events.append(('relay-legacy-mode', host, args[-1]))
         return {'stable_relay': 200}
 
     def state(self, host, op):
@@ -118,6 +121,13 @@ class PromotionSafety(unittest.TestCase):
         self.assertLess(e.index(('relay', 'old')), client_check)
         self.assertLess(client_check, dns_update)
         self.assertGreater(e.index(('clients', '192.0.2.2'), client_check + 1), dns_update)
+
+    def test_switchback_keeps_retired_domain_blocked(self):
+        self.args.source_legacy_mode = 'blocked'
+        self.args.target_legacy_mode = 'local'
+        promote.promote(self.args)
+        self.assertIn(('legacy-mode', 'new', 'local'), self.events)
+        self.assertIn(('relay-legacy-mode', 'old', 'blocked'), self.events)
 
     def test_failed_client_recovery_rolls_back_before_dns_cutover(self):
         self.fail_clients = True

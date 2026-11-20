@@ -215,8 +215,9 @@ def main():
         run(['systemctl', 'enable', '--now', 'headplane'])
         reload_proxy()
         for attempt in range(15):
-            checks = [status(domain, ip, '/health'), status(domain, ip, '/admin/login')]
-            if checks == ['200', '200']:
+            expected_legacy = '200' if legacy_mode == 'local' else '503'
+            checks = [status(domain, ip, '/health'), status(domain, ip, '/admin/login'), status(legacy, ip, '/health')]
+            if checks == ['200', '200', expected_legacy]:
                 break
             time.sleep(1)
         else:

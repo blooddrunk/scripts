@@ -305,13 +305,13 @@ def promote(args):
             # Set before the remote call: a lost SSH response is ambiguous.
             target_attempted = True
             helper(args.target, ACTIVATE, [op, stage, args.domain, args.target_legacy,
-                                         args.target_ip, 'blocked'], timeout=180, writer_lock=True)
+                                         args.target_ip, args.target_legacy_mode], timeout=180, writer_lock=True)
             journal(log, phase='target-active')
             after_count, after_digest = node_digest(args.target)
             if (count, digest) != (after_count, after_digest):
                 raise RuntimeError('destination identity or routes do not match source')
             helper(args.source, RELAY, [op, args.domain, args.source_legacy,
-                                       args.source_ip, args.target_ip])
+                                       args.source_ip, args.target_ip, args.source_legacy_mode])
             journal(log, phase='legacy-relay-ready')
             wait_for_clients(args, args.target_ip, probes)
             journal(log, phase='clients-ready-before-dns')
@@ -321,7 +321,8 @@ def promote(args):
             journal(log, phase='complete')
             print(json.dumps({'operation': op, 'active': args.target, 'fenced': args.source,
                               'dns': args.target_ip, 'nodes': count, 'routers_verified': len(args.routers),
-                              'legacy_relay': 'healthy', 'backup': final_archive, 'journal': str(log)}, sort_keys=True))
+                              'legacy_relay': 'blocked' if args.source_legacy_mode == 'blocked' else 'healthy',
+                              'backup': final_archive, 'journal': str(log)}, sort_keys=True))
         except Exception as original:
             journal(log, phase='failed', error=str(original)[:350])
             if not sealed:
@@ -359,7 +360,7 @@ def promote(args):
                     journal(log, rollback_backup=rollback_archive, rollback_stage=rollback_stage,
                             rollback_operation=rollback_op, phase='restoring-source')
                     helper(args.source, ACTIVATE, [rollback_op, rollback_stage, args.domain,
-                                                  args.source_legacy, args.source_ip, 'local'],
+                                                  args.source_legacy, args.source_ip, args.source_legacy_mode],
                            timeout=180, writer_lock=True)
                     dns_change(token, args.cf_zone, args.domain, args.target_ip, args.source_ip)
                     journal(log, phase='rolled-back-from-target-snapshot')
@@ -380,6 +381,8 @@ def main():
     parser.add_argument('--router', dest='routers', action='append', default=[])
     parser.add_argument('--probe', dest='probes', action='append', default=[],
                         metavar='ROUTER=PEER_IP', help='WireGuard TSMP peer required for each router')
+    parser.add_argument('--source-legacy-mode', choices=('local', 'blocked'), default='local')
+    parser.add_argument('--target-legacy-mode', choices=('local', 'blocked'), default='blocked')
     parser.add_argument('--preflight-only', action='store_true', help='verify preparation without fencing either host')
     args = parser.parse_args()
     if len(args.routers) < 1:

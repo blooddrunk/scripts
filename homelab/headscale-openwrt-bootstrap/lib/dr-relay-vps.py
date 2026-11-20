@@ -17,9 +17,12 @@ def run(args, check=True):
 
 
 def main():
-    if os.geteuid() or len(sys.argv) != 6:
-        raise RuntimeError('requires root, operation, stable/legacy domains, source/target IPs')
-    op, domain, legacy, source_ip, target_ip = sys.argv[1:]
+    if os.geteuid() or len(sys.argv) not in (6, 7):
+        raise RuntimeError('requires root, operation, stable/legacy domains, source/target IPs and optional legacy mode')
+    op, domain, legacy, source_ip, target_ip = sys.argv[1:6]
+    legacy_mode = sys.argv[6] if len(sys.argv) == 7 else 'local'
+    if legacy_mode not in ('local', 'blocked'):
+        raise RuntimeError('invalid legacy mode')
     if not re.fullmatch(r'[a-f0-9]{16}', op):
         raise RuntimeError('invalid operation')
     for name in (domain, legacy):
@@ -71,8 +74,8 @@ def main():
 }
 '''.replace('TARGET', target_ip).replace('DOMAIN', domain)
     try:
-        for path in paths:
-            path.write_text(config)
+        paths[0].write_text(config)
+        paths[1].write_text(config if legacy_mode == 'local' else 'location ^~ / { return 503; }\n')
         if admin.exists():
             admin.unlink()
         run(['docker', 'exec', container, 'openresty', '-t'])
@@ -83,13 +86,14 @@ def main():
                 result = run(['curl', '-sS', '--noproxy', '*', '--max-time', '10', '-o', '/dev/null', '-w', '%{http_code}',
                               '--resolve', name + ':443:' + source_ip, 'https://' + name + endpoint], False)
                 statuses.append(result.stdout if not result.returncode else 'failed')
-            if statuses == ['200', '200', '200']:
+            legacy_expected = '200' if legacy_mode == 'local' else '503'
+            if statuses == ['200', legacy_expected, '200']:
                 break
             time.sleep(1)
         else:
             raise RuntimeError('former domain relay health checks failed: ' + ','.join(statuses))
         (fence / 'RELAY_READY').touch(mode=0o600, exist_ok=False)
-        print(json.dumps({'former_writer': 'masked', 'stable_relay': 200, 'legacy_relay': 200,
+        print(json.dumps({'former_writer': 'masked', 'stable_relay': 200, 'legacy_relay': int(legacy_expected),
                           'headplane_login': 200}, sort_keys=True))
     except Exception:
         for i, path in enumerate(paths + [admin]):

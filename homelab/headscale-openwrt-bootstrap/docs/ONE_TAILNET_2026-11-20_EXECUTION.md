@@ -1,8 +1,8 @@
 # 单 Tailnet 迁移执行记录：2026-11-20
 
-**状态（2026-11-20 晚间，台北时间）：家庭 WireGuard 和 SSH 已恢复，
-HOME-PC-2 已入网，生产主备演练待完成。** 下节记录本次复核，后续各节
-保留白天暂停前的历史证据。
+**2026-11-20 晚间（台北时间）已恢复家庭 WireGuard 和 SSH，接入
+HOME-PC-2，并完成 Raksmart → Bitsflow → Raksmart 的生产演练。**
+Raksmart 是唯一活动写入端。后文保留当天早些时候的排查证据。
 
 节点接入步骤、Headplane 登录方式和 1Panel 实际配置归属见
 [节点接入与管理入口](ONE_TAILNET_ACCESS.md)。
@@ -34,7 +34,7 @@ HOME-PC-2 已入网，生产主备演练待完成。** 下节记录本次复核�
   后续 25 秒采样见两台路由器各自同一条到 Raksmart 443 的
   tailscaled TCP 连接持续建立。长期稳定性、Raksmart 路径 MTU、
   HY2 候选和无 daed 恢复仍待验收。
-- 家庭与两台公司路由器的 `tailscale debug derp` 实测 999、901 和
+- 移除 901 前，家庭与两台公司路由器的 `tailscale debug derp` 实测 999、901 和
   官方 Tokyo 区均完成 DERP 握手。三处的官方 Tokyo 探测均收到 IPv4
   STUN 回包，两台自建中继的探测均未收到 IPv4 STUN 回包。
   家庭已建立官方 Tokyo 连接。
@@ -50,23 +50,75 @@ HOME-PC-2 已入网，生产主备演练待完成。** 下节记录本次复核�
 - Raksmart 保持唯一权威，稳定和旧 Raksmart 域名的 TLS、健康检查及
   稳定域名的 Headplane 登录页通过。双机证书已登记 1Panel 自动续期，
   见[节点接入与管理入口](ONE_TAILNET_ACCESS.md)。
-  本次尚未进行生产 fencing、提升、DNS 变更或切回演练。
 
-## 生产演练的恢复顺序
+## 生产提升与切回
 
-1. 在独立管理通道复核两台公司路由器的控制长连接、实际 HY2 出口、
-   Raksmart 主机路由 MTU/MSS 和管理恢复能力，再判断是否调整 daed。
-2. 在各站点确认官方和自建中继的实际数据面，分离 901 与目标 999。
-   如果迁移 901，先让客户端实际使用独立中继。若退役 901，先验证目标
-   客户端的替代中继以及无法直连时的 TSMP。确认客户端地图更新后再释放
-   备机的 UDP/3478 并处理恢复单元。保留 901 的配置、服务与证书回退。
-3. 将上次运维端的受限 DNS token 安全放回当前 WSL 的
-   `~/.config/headscale-dr/cloudflare-token`，权限 0600。HOME-PC-2
-   当前缺少该文件。更新并异地校验一致性快照，运行 `--preflight-only`。
-4. 执行受控提升。检查持久封锁和节点摘要，验证旧域名兼容、Headplane
-   与各路由器的 HTTPS、目标 DERP 握手和 TSMP 后才更新 DNS，再复测。
-   如需切回，先持久封锁现写入端，再用其最新停机快照恢复旧主。
-   保留最后一次已验证快照时间作为非计划故障的恢复点，备份目前按需执行。
+- 使用独立临时客户端禁用其直连 UDP，经官方 Tokyo 区与三台路由器
+  分别验证实际 DERP 路径和 TSMP。临时节点到 WORK-PC 首次探测超时，
+  随后家庭正式节点到 WORK-PC 的 TSMP 和 `relay "tok"` 活动会话通过。
+  临时身份已清理，正式节点保持 6 个。
+- 在 Raksmart 保存可恢复原属主、属组和权限的 901 配置，布置 300 秒
+  systemd 回退，移除地图中的 901。确认三台路由器收到新地图并通过
+  TSMP、家庭到两台 Windows 的 TSMP 都通过，再解除回退。随后停用
+  Bitsflow 两个 901 恢复单元，释放 UDP/3478。恢复单元配置、旧代理
+  配置和旧 DERP 密钥保留在主机上。需要恢复 901 时，先确认拓扑和
+  端口无冲突，再恢复原地图与中继。
+- 受限 Cloudflare 令牌验证有效。预检 `3f068b080ed2498c` 完成后，
+  实际提升 `2987ba2177c1487a` 于 **21:24:38** 完成。Raksmart 持久
+  `masked` 并停止运行后，从其停机快照
+  `raksmart-20261120T132253Z.tar.gz.gpg` 恢复 Bitsflow。旧域名转发、
+  Headplane 登录入口和三台路由器的 HTTPS、DERP 999 握手及 TSMP
+  在 DNS 更新前通过。DNS Only A 切到 Bitsflow 后三台路由器复测通过，
+  家庭两台 Windows 的 TSMP 与 WORK-PC 的 RDP TCP 亦通过。
+- 实际切回 `68fe7ee2f9e84116` 于 **21:27:39** 完成。先持久封锁
+  Bitsflow，再用其停机快照 `bitsflow-20261120T132601Z.tar.gz.gpg`
+  恢复 Raksmart。两个方向均保留 6 个节点的身份、地址和批准路由，
+  保持 Noise 指纹 `83f45cb98d28`。两份停机快照的异地副本校验通过。
+- 最终 DNS Only A 指向 Raksmart，TTL 60。Raksmart Headscale 与
+  Headplane 运行，Bitsflow Headscale `masked` 且 Headplane 停止。
+  Bitsflow 上的稳定域名转发到 Raksmart，可服务切回前缓存的地址。
+  旧 Raksmart 域名 `/health` 为 200，旧 Bitsflow 域名仍为 503。
+  切回后实际登录 Headplane，确认显示 6 个节点，并立即撤销测试 API key。
+  三台路由器的 DERP 和 TSMP 通过，两台公司路由器均再次经子网路由
+  认证登录家庭 SSH，HOME-PC-2 与 WORK-PC 再次通过 RDP NLA 协商。
+  两处 daed 持续运行，家庭 honk 持续运行，Passwall2 保持停用。
+- 最新在线权威快照 `raksmart-20261120T132814Z.tar.gz.gpg` 已验证
+  GPG、manifest、SQLite、双机 SHA-256 及 Bitsflow 隔离恢复。记录的恢复点为
+  **2026-11-20 21:28:15 台北时间**。当前按需备份，非计划故障的 RPO
+  随最后一次快照的时间增长。令牌、解密口令和操作日志留在运维端，
+  解密口令需独立托管。
+
+## 下次切换
+
+先核对现写入端、DNS、独立 VPS SSH、三台路由器的管理路径、证书及 DERP
+拓扑，再用相同参数加 `--preflight-only` 预检。示例在仓库根目录执行，
+`HEADSCALE_DR_SSH_CONFIG` 指向已验证且固定主机密钥的私有 SSH 配置。
+
+```sh
+python3 homelab/headscale-openwrt-bootstrap/headscale-promote.py \
+  --source raksmart --source-ip 107.148.154.129 \
+  --target bitsflow --target-ip 216.23.86.169 \
+  --domain hs.haoqi90.top --cf-zone haoqi90.top \
+  --source-legacy hs-raksmart.haoqi90.top --source-legacy-mode local \
+  --target-legacy hs-bitsflow.haoqi90.top --target-legacy-mode blocked \
+  --cf-token-file "$HOME/.config/headscale-dr/cloudflare-token" \
+  --passphrase-file "$HOME/.config/headscale-dr/home-pc-2-backup.passphrase" \
+  --backup-dir "$HOME/.local/share/headscale-dr/backups" \
+  --router router-home --probe router-home=100.64.0.3 \
+  --router router-my-workspace --probe router-my-workspace=100.64.0.1 \
+  --router router-qi-workspace --probe router-qi-workspace=100.64.0.1 \
+  --preflight-only
+```
+
+预检通过后移除 `--preflight-only` 执行。计划切回时对调源和目标的主机、
+IP、旧域名和旧域名模式。若提升中断，检查
+`~/.local/share/headscale-dr/operations/` 对应事务。目标可能已写入时，
+必须确认它已持久封锁，并以它的最新停机快照恢复。无法确认封锁时禁止
+启动另一写入端。
+
+仍待处理的事项为公司 daed 长期稳定性及独立恢复验收、自建中继的公网
+IPv4 STUN 回包、WORK-PC 账号登录和离线设备核对。`qi-work-pc` 由用户
+手工接入。
 
 ## 白天暂停前的现网记录
 
