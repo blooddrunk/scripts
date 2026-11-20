@@ -9,6 +9,7 @@
 
 - homelab/headscale-openwrt-bootstrap/docs/ONE_TAILNET_2026-11-20_EXECUTION.md
 - homelab/headscale-openwrt-bootstrap/docs/ONE_TAILNET_PORTABLE_CONTROL_PLANE.md
+- homelab/headscale-openwrt-bootstrap/docs/ONE_TAILNET_ACCESS.md
 - homelab/openwrt-dns-daed/README.md 的单 Tailnet 和远程恢复说明
 
 承接现有成果，以原请求的最多两个紧凑迭代完成，不要重做已验证步骤。
@@ -59,6 +60,10 @@ Headscale/Headplane、节点身份、密钥、路由和各设备，生成并异�
 确认目标封锁时不要重启旧主。不要合并两套 SQLite、重置节点身份或
 声称自动选主。确保未来服务端提升与回退流程可复用，记录 RPO 和
 剩余限制；证书续期和双机部署此前尚未自动化。
+此前稳定域名的网站与证书只是直接写入 1Panel OpenResty 文件，未
+登记到 1Panel 的网站/证书数据库，用户在面板中看不到。请在保护现有
+443/Xray 分流并准备回退的前提下，将其安全纳入面板管理和续期流程；
+不要直接重复创建同域名站点，也不要误认为当前证书由 1Panel 托管。
 
 迁移已可安全访问的其余客户端并核实实际 ControlURL：本机 Windows
 WORK-PC 已是权威网络节点，用户希望从家中远程连接它；已启用无人值守，

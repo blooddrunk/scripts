@@ -10,6 +10,8 @@ WireGuard 层和 SSH 未恢复。Raksmart → Bitsflow 的
 用户目前不在家，已要求暂停主要迁移。回家后可复制
 [继续执行提示词](ONE_TAILNET_RESUME_PROMPT.md) 恢复本任务；暂停期间
 除用户另行明确要求的事项外，不要主动操作服务器、DNS 或路由器。
+节点接入步骤、Headplane 登录方式和 1Panel 实际配置归属见
+[节点接入与管理入口](ONE_TAILNET_ACCESS.md)。
 
 ## 现网与已验证结果
 
