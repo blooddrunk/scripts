@@ -153,18 +153,29 @@ fallback: proxy
 
 ```text
 请阅读并执行 /home/jelinenaro/code/scripts/homelab/openwrt-honk/quota-aware-policy-plan.md
-（流量感知节点策略，计划已定稿未执行）。我现在在家、已通过 LAN 直连 router-home
-（ssh profile: router-home），前置条件 §2 视为满足，其中 komari 域名和 Sub-Store
-token 如需现值，从路由器 /etc/honk/config.dae 现有订阅行和 raksmart 现场取。
+（流量感知节点策略，计划已定稿、router-home 尚未做任何变更）。我现在在家，已通过
+LAN 直连 router-home（ssh profile: router-home），plan §2 的前置条件视为满足。
+
+现值来源（需要时自行取用，不要向我要）：
+- Sub-Store token：router-home /etc/honk/config.dae 现有订阅行里；
+- komari 地址：ssh profile raksmart 上 1Panel 站点/openresty 反代确认域名
+  （容器端口 127.0.0.1:25774），拿不到域名就 --resolve 直钉 raksmart IP。
 
 执行要求：
-1. 严格按 §6 顺序，先走完 §3 的 komari 月度用量决策树再动配置；
-2. reload 前必须 watchdog 布防（§6.5），验证全绿后才解除；
-3. premium 默认 us、proxy 用 score、订阅走 Sub-Store 每 VPS 单订阅导出（§4），
-   不要引入 name() 类脆弱过滤；
-4. bitsflow 的节点入口直连规则（hy2 固定口/跳跃段/443）按实际节点信息补全；
-5. 部署 §5 的 quota-switch 脚本 + cron（阈值 T_HIGH=20% T_LOW=10%），
-   手动触发一次验证切换与滞回；
-6. 完成后把实施结果回写到该 plan 文件（勾选 §8）和同目录 README，
-   提交并 push 到本仓库；score 观察（§7）留待日常使用中判断，不在本次范围。
+1. 严格按 §6 顺序；动配置前先备份，reload 前必须 watchdog 布防（§6.5），全绿才解除；
+2. 先走完 §3 komari 月度用量决策树（totalUp/Down 与面板卡片对拍；不对则 admin API
+   或脚本自累计），把结论写进脚本配置再继续；
+3. §4 配置：订阅用 Sub-Store 每 VPS 单订阅导出（raksmart/lightlayer/bitsflow 三条，
+   route: direct），池身份只用 subtag，禁止引入 name() 类脆弱过滤；premium=selector
+   默认 us，`default:` 语法若 validate 不过就删掉、改用脚本 honk-core proxy 钉初始选择；
+4. bitsflow 的节点入口直连规则（hy2 固定口 dip/sip、跳跃段、reality 443 IP 列表）
+   按订阅返回的实际节点信息补全；raksmart/lightlayer 现有直连规则保持不动；
+5. 部署 §5 quota-switch 脚本 + config + cron（T_HIGH=20% T_LOW=10%），手动跑一次
+   看切换与滞回（可临时调阈值触发，验完恢复正常值）；
+6. 红线：不动 passwall2 退役状态与其已注释的 cron 行；不动 tailnet 保命规则；
+   任何一步失败立即用备份回滚 + honk-core reload 并如实报告，不要硬闯；
+7. 收尾：勾选 §8 验证清单，把实施结果（含 komari 决策树的最终结论、score 是否
+   保留）回写本 plan 和同目录 README，git commit + push，并更新记忆
+   honk-home-router-deployment（待执行 → 已执行 + 关键结论）。
+score 的日常稳定性观察（§7）不在本次范围，留待使用中判断。
 ```
