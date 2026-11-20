@@ -63,18 +63,34 @@ UDP 可用、IPv6 正常）不需要这些。逐项裁决：
 | passwall2 cron 中和 | crontab 有 `4:00 restart passwall2`、`5:00 订阅更新`——init.d 的 restart 会把已停用的服务**重新拉起**，不注释掉会在凌晨与 honk 冲突 |
 | `.lan` 本地域名放行 | `qname(suffix: lan) -> asis`，让 dnsmasq 的本地/DHCP 主机名解析不受 honk DNS 接管影响（实施时验证，行为不符则删） |
 
-## 分组与订阅设计
+## 分组与订阅设计（2026-11-20 二次改造后）
 
-Sub-Store `MySub` 当前节点构成（2026-11-20 实测）：nosla×2（退役中，仍被派发）、raksmart×2、ll×2，
-bitsflow 不在集合内。home 只订一个订阅，nosla 用组过滤排除（不在 Sub-Store 侧动刀，避免影响公司侧）：
+Sub-Store 统一入口、每 VPS 单订阅导出（`/download/<vps>`，全部 `route: direct`），
+**订阅 tag 即池身份**（`subtag()` 过滤，节点改名/随机后缀不影响分组；首版 name(keyword) 方案已弃用）：
 
-| 组 | 过滤 | 策略 | 用途 |
-|---|---|---|---|
-| `proxy` | `name('^(raksmart|ll)-')`（4 节点） | min_moving_avg + 50ms 容差 | 日常代理 |
-| `premium` | `name('^raksmart-')`（2 节点） | min_moving_avg | anthropic/paypal 等出口敏感规则 |
-| `doh` | `name('^(raksmart|ll)-') && name('-(hysteria2\|reality)')`（4 节点） | min_moving_avg | fallback DoH 承载：双 VPS 双协议 |
+| 订阅 tag | 节点 | | 组 | 过滤 | 策略 | 用途 |
+|---|---|---|---|---|---|---|
+| raksmart | 2（reality-443 / hy2-51197） | | `us` | subtag(raksmart)+subtag(lightlayer) | min_moving_avg + 50ms 容差 | 美国池，premium 默认承载 |
+| lightlayer | 2（hy2-36143 / reality-443） | | `jp` | subtag(bitsflow) | min_moving_avg + 50ms 容差 | 日本池，配额不足备选 |
+| bitsflow | 2（hy2-47625 / reality-443） | | `proxy` | group(us)+group(jp) | **score** | 日常代理（不稳回退 min_moving_avg 一行） |
+| | | | `premium` | group(us)+group(jp) | fixed selector，`default: us` | openai/anthropic/paypal，quota-switch 按月配额切 us\|jp |
+| | | | `doh` | group(us)+group(jp) | min_moving_avg | fallback DoH 承载：三 VPS 双协议 |
 
-注：dae 的 `min` 策略在 honk 里不存在，用 `min_moving_avg` 等价替代。
+nosla 不订阅自动绝迹。bitsflow 入口直连规则：hy2 固定口 47625 dip/sip、跳跃段 48000-50000 双向（三 IP 共用行）、reality 443 IP 列表加 bitsflow 公网 IP（真实值见路由器 config）。
+
+## 实施记录二：流量感知节点策略（2026-11-20 晚完成）
+
+按 [quota-aware-policy-plan.md](quota-aware-policy-plan.md) 执行，§6 全序走完，要点与偏差：
+
+1. **komari 月度用量决策树**（§3）：agent 带 `--month-rotate 16`（TZ=UTC，序列持久化于 bind mount），
+   `/api/recent` 的 totalUp+totalDown 即月度真值，**计费周期 = 每月 16 日 00:00 UTC**；面板卡片/告警同源，
+   admin API 不需要。冷启动缺口（序列 11-19 02:26 UTC 才开始，本周期缺 ~36G）用脚本内**自过期 offset** 补偿（12-16 失效）。
+2. **validate 的坑**：`honk-core config validate` 不检查 filter 表达式语义（写错函数名照样通过），
+   filter 解析失败 = 静默忽略 + 组空。本次对 v0.1.0-beta.6 源码核实 `subtag()`/`group()`/`score`/`fixed`+`default`/`tolerance` 后才 reload。
+3. **CLI 的坑**：`honk-core proxy premium jp` 不接受嵌套组成员（"Node not found"），脚本用 clash API `PUT /proxies/premium` 替代。
+4. watchdog 420s 布防→reload→全绿解除；备份 `/root/honk-quota/config.dae.bak-1795183476`。
+5. quota-switch.sh + config.sh + cron `*/30`（passwall2 已注释行未动）；滞回/告警/cron 触发均实证（详见 plan §10）。
+6. **score 保留**：proxy 组以 score 上线，首晚正常；§7 观察判据留待日常，回退 = 改一行 + reload。
 
 ## 实施记录（2026-11-20 完成）
 
@@ -108,8 +124,11 @@ bitsflow 不在集合内。home 只订一个订阅，nosla 用组过滤排除（
 
 - **raksmart-reality 节点 UDP 健康检查标记 dead**：与既有结论一致（raksmart 出站 CN 方向 UDP 运营商过滤）；DoH 承载是 TCP 不受影响，TCP 代理正常（当前出口即该节点）
 - **ll-reality-tcp-443 从家宽直连超时**：与公司侧 lightlayer 443 病理一致（路径级丢包），节点保持 dead 备用；ll-hysteria2 正常（165ms）
+- **bitsflow-hysteria2 TCP/DnsUdp 探测标记 dead**（2026-11-20 晚）：bitsflow-reality-tcp-443 活跃（chatgpt trace ~50ms）；jp 池实际由 reality 节点承载，hy2 待观察
+- **router 本机 DNS 污染路径（既有，与 honk 配置无关）**：本机 `127.0.0.1:53` 走 dnsmasq→ISP 明文上游（pname 豁免规则放行），openai/google 等被污染域拿到假 IP；假 **IPv6** 目标会使本机 curl 直连假 IP 挂起（本机 v6 出流未入 honk 拦截面），v4 无碍（SNI 嗅探 + dial_mode:domain 按域重拨）。LAN/tailnet 客户端路径（honk 劫持→doh 组）完全干净（openai=Cloudflare 真段、google=142.251 真段实测）。根治思路：dnsmasq noresolv + 上游钉 honk / 本机压 AAAA，另立任务
 - **kwrt-1（远程站）查询 192.168.100.1:53 超时**：非 honk 回归——同路径从 WSL 正常，属 kwrt-1 站点/ACL 既有问题
 - honk 首启日志 `LAN self-protection coverage could not be confirmed` 为提示性 WARN（local-direct 块实际已渲染）
+- **selector 切换不复位既有连接**：premium us↔jp 切换后，已建立的 chatgpt 等长连接保持原出口直到自然结束，新连接走新选择（验证出口时勿用已有连接池的域名直读 IP，chatgpt.com:443 有连接复用干扰，用组延迟/连接链路判断）
 
 ## 升级路径（官方源能力）
 
@@ -138,9 +157,9 @@ apk update && apk upgrade honk luci-app-honk   # 或 LuCI → 服务 → Honk �
 本目录文件保持脱敏：节点 IP 用 RFC 5737 占位、域名用 example.top、订阅 URL 去除 token。
 真实值只存在于路由器 `/etc/honk/config.dae` 与本地记忆，勿提交。
 
-## 后续计划（已定稿未执行）
+## 后续计划
 
-- [quota-aware-policy-plan.md](quota-aware-policy-plan.md) —— 流量感知节点策略：us/jp 池 + `proxy` 组 score 先行 + `premium` 组 selector 由 komari 配额脚本切换；Sub-Store 每 VPS 单订阅导出做池身份。等用户回家经 LAN 执行（plan 文末含执行 prompt）。
+- [quota-aware-policy-plan.md](quota-aware-policy-plan.md) —— **已于 2026-11-20 晚执行完毕**（结论与偏差见 plan §10 及上文实施记录二）。遗留观察：§7 score 稳定性判据（3–7 天）、bitsflow-hysteria2 dead 状态、router 本机 DNS 污染路径根治。
 
 ## 已知关联问题（非本次范围，记录备查）
 

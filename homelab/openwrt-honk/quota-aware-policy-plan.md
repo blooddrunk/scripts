@@ -1,6 +1,6 @@
 # quota-aware-policy-plan：流量感知节点策略（router-home / honk）
 
-> 状态：**计划已定稿，未执行**。等用户回家经 LAN 连上 router-home 后按文末执行 prompt 实施。
+> 状态：**已执行（2026-11-20 晚）**。实施结论见 §10；§7 score 日常观察留待使用中判断。
 > 依据 2026-11-20 对 honk 文档与 raksmart 现场（Sub-Store/komari）的实测研究。
 
 ## 0. 已定决策记录
@@ -25,10 +25,10 @@
 
 ## 2. 前置条件（执行前逐项确认）
 
-- [ ] **bitsflow 节点可用**：Sub-Store 已有名为 `bitsflow` 的单订阅（2026-11-20 实测确认存在），执行时先 `curl` 验证 `/download/bitsflow` 返回节点
-- [ ] **lightlayer 去留**：保留则订阅 `lightlayer` 并入 us 池；不保留则相关行全删
-- [ ] **komari 可达**：router-home 能访问 komari 公网地址（openresty 反代 raksmart:25774；域名执行时从 DNS/1Panel 确认，下称 `KOMARI_BASE`）。若域名被墙：komari 在 raksmart 本机，可走 honk 代理（curl 经 `fallback: proxy` 自动生效）或 `--resolve` 直钉 raksmart IP
-- [ ] 用户在家、**经 LAN 直连 router-home**（本次变更为 reload 级 + 订阅重建，有短暂 fail-closed 窗口，不走 tailnet 作业）
+- [x] **bitsflow 节点可用**：Sub-Store 已有名为 `bitsflow` 的单订阅（2026-11-20 实测确认存在），执行时先 `curl` 验证 `/download/bitsflow` 返回节点 → 三条 `/download/<name>` 全 200/0.7-1.0s，bitsflow 2 节点（hy2 固定口 47625 + reality-443，域名单点解析到其公网 IP）
+- [x] **lightlayer 去留**：保留则订阅 `lightlayer` 并入 us 池；不保留则相关行全删 → **保留**，us=raksmart(2)+lightlayer(2)
+- [x] **komari 可达**：router-home 能访问 komari 公网地址（openresty 反代 raksmart:25774；域名执行时从 DNS/1Panel 确认，下称 `KOMARI_BASE`）。若域名被墙：komari 在 raksmart 本机，可走 honk 代理（curl 经 `fallback: proxy` 自动生效）或 `--resolve` 直钉 raksmart IP → **KOMARI_BASE = https://monitor.haoqi90.top**（raksmart 1Panel/openresty `monitor.conf` → 127.0.0.1:25774），router-home 直连可达
+- [x] 用户在家、**经 LAN 直连 router-home**（本次变更为 reload 级 + 订阅重建，有短暂 fail-closed 窗口，不走 tailnet 作业）
 
 ## 3. komari 能力清单（2026-11-20 对 raksmart :25774 实测）
 
@@ -45,6 +45,16 @@
 3. 兜底：脚本自累计（每次采样 ratchet 累加，周期日重置）——冷启动有盲区，仅在前两条都不可行时用
 
 计费周期字段 `billing_cycle: 0` 的具体含义（0=自然月？）同样在执行期从面板配置确认，确保"月初自动回切"成立。
+
+### 3.1 决策树最终结论（2026-11-20 执行期钉死）
+
+**走第 1 条路：`/api/recent` 直接可用，但有两处修正。**
+
+1. **月度语义成立，机制与预想不同**：komari-agent（raksmart 上）以 `--month-rotate 16` 启动（TZ=UTC），agent 侧维护按 2s 采样、10min 落盘的流量时间序列（`net_static.json`，bind mount `/opt/1panel/docker/compose/komari-agent/traffic-data/`，watchtower 重建容器不丢），`totalUp/totalDown = GetTotalTrafficBetween(上次重置日, now)` —— **真·月度值，计费周期 = 每月 16 日 00:00 UTC**（非自然月！）。uptime 字段是宿主机口径（agent 容器重启不清零计数）。
+2. **对拍成立（源码级）**：komari 服务端告警（`utils/notifier/traffic.go`）与首页流量进度条都直接消费 latest report 的 `totalUp/totalDown`，与 `/api/recent` 同源同值，无独立月度账本。admin API 不需要。
+3. **冷启动缺口（需补偿）**：raksmart 的序列文件 2026-11-19 02:26 UTC 才开始持久化，本周期（11-16 起）缺失 ~36G（ens7 since-boot 88.6G − 序列累计 52.9G 实测推得）。**脚本加自过期 bootstrap offset 36GiB（至 2026-12-16T00:00Z 失效）**；下周期起序列完整覆盖，无需人工清理。
+4. **`billing_cycle: 0` 是订阅周期展示字段，与流量重置无关**；"月初自动回切"由 16 日重置后剩余率回升 ≥20% 达成。
+5. 遗留假设：bitsflow 侧 agent 的 `--month-rotate` 无法 ssh 验证（假定与 raksmart 同模板部署）；其数字仅作监控告警（jp 无处可切场景），风险可接受。
 
 ## 4. honk 配置变更（/etc/honk/config.dae）
 
@@ -142,12 +152,26 @@ fallback: proxy
 
 ## 8. 验证清单
 
-- [ ] us/jp 池节点数正确（raksmart 2、lightlayer 2、bitsflow N；nosla 为 0）
-- [ ] `honk-core proxy premium jp` 切换后 AI 域名出口 IP 变为 bitsflow；切回 us 同理
-- [ ] 手动把 T_LOW 调成 99% 跑脚本 → premium 自动切 jp → 调回正常值 → 回 us（滞回验证）
-- [ ] komari 月度数字与面板卡片一致
-- [ ] cron 生效、logger 有痕、bitsflow 告警路径可用（临时调阈值触发一次）
-- [ ] reload 后 selector 选择保持（premium 仍钉在脚本上次的选择）
+- [x] us/jp 池节点数正确（raksmart 2、lightlayer 2、bitsflow 2；nosla 为 0）
+- [x] premium 切换后 AI 域名走目标池：jp 时组延迟对 chatgpt trace 52ms（jp=51/us=157 实锤 JP 出口）、bitsflow-reality 直测 api.openai.com 230ms 通；us 时 openai 401/chatgpt 200 正常抵达。出口 IP 直证（cdn-cgi/trace）受 chatgpt.com:443 既有连接池复用干扰不可靠，以组延迟+连接链路（/connections chains 含 premium）为准
+- [x] 阈值触发滞回：T_HIGH=99/T_LOW=95 → us→jp；区间 [50,97) → hold jp；恢复 20/10 → jp→us（全 logread 留痕）
+- [x] komari 月度数字与面板卡片一致（源码级同源证明，见 §3.1；无独立月度账本可对拍）
+- [x] cron 生效（临时改每分钟实跑一次见 logger，恢复 */30）、logger 有痕、bitsflow 告警路径可用（JP_WARN_PCT=99.9 触发 logger -s 实证）
+- [x] reload 后 selector 选择保持（PUT jp → honk-core reload → now 仍 jp）
+
+## 10. 实施结果（2026-11-20 晚，当日完成）
+
+**§6 全序执行完毕，与计划的偏差与发现：**
+
+1. **`honk-core config validate` 不做 filter 表达式语义检查**（故意写错函数名 `subtagx()` 仍 validate 通过）——filter 解析失败在 honk 里是"忽略该行 + 组变空"（fail-closed 方向），validate 绿灯≠安全。本次改为对 v0.1.0-beta.6 源码逐项核实（`subtag()`/`group()` 独占整行/`policy: score|fixed|min_moving_avg`/`tolerance`/`default` 均支持）后才 reload。**后续改 filter 必须看 logread 有无 "could not parse this filter" 类告警**。
+2. **`honk-core proxy premium jp` CLI 报 "Node 'jp' not found"**——proxy 子命令不接受嵌套组成员。quota-switch.sh 改用 clash API `PUT /proxies/premium {"name":"jp"}`（204 生效），效果等同且选择持久化不变。
+3. `default: us` 语法 validate + 实际行为均通过（reload 后初始 now=us），无需删掉、无需脚本钉初始选择。
+4. bitsflow 直连规则按实测补全（IP 为其域名单点解析的公网地址，真实值只在路由器 config）：hy2 固定口 **47625** dip/sip、跳跃段 48000-50000 双向、reality 443 加入既有 IP 列表行。
+5. watchdog 420s 布防→reload→验证全绿→解除（未触发）。备份 `/root/honk-quota/config.dae.bak-1795183476`。
+6. **premium 组流量分发实测正常**（LAN 客户端 chatgpt.com 链路 chains=[节点,us,premium]、rule=geosite）；selector 切换不复位既有长连接（既有流保持原出口，新流走新选择）。
+7. **意外发现（与本次变更无关的既有问题）**：router 本机 `127.0.0.1:53`（dnsmasq→ISP 明文上游，pname 直连豁免路径）解析 openai/google 得到 GFW 污染答案（Facebook/Twitter IP）；污染 **IPv6** 目标时 curl 直连假 IP 挂起（本机 v6 出流未走 honk 的迹象），v4 因 SNI 嗅探+按域重拨不受影响。LAN/tailnet 客户端路径（honk 劫持→doh 组）解析完全干净。已记 README 已知观察；如需根治可给 dnsmasq 配 noresolv+上游钉 honk 或压 AAAA，另立任务。
+8. **score 保留**：proxy 组即 score 策略上线，首晚表现正常（google 204 0.25s、LAN 会话无感），§7 三项判据留待日常观察，未回退。
+9. quota-switch 部署细节：`/root/honk-quota/{quota-switch.sh,config.sh}`（含 §3.1 的 bootstrap offset）、cron `*/30`（已注释的 passwall2 行原样未动）、us 池保险从"组延迟探测"改为"遍历成员任一可达"（urltest 瞬时选中死节点会误报整池故障）。当前读数：us 剩余 91.5%（含 offset）、jp 99.6%、premium=us。
 
 ## 9. 执行 prompt（回家后整段粘贴给助手）
 
