@@ -165,3 +165,7 @@ TCP SYN 到不了服务器时，比较日常网络和独立网络，并用服务
 | 旧入站退役后需要恢复 | 用退役前备份定向恢复旧入站、对应的模板引用及订阅。若整库恢复，先保护备份后发生的账户、配置与统计变更 |
 
 现有四台的部署备份在各 VPS 的 `/root/vps-proxy-rollout-20261118/`。该目录下的 `rollout.py <profile> rollback-cutover` 恢复原 TCP 443，`rollback-harden` 用于恢复原管理和路由配置，应在切换已回退后执行。最近一次旧入站备份使用 `retire-<旧端口>-<时间戳>/` 命名。`retire.py <profile> rollback <时间戳>` 会恢复该次退役前的 3x-ui 数据库。路由器的备份在各自同名目录内。上述脚本是现有实例的运维工具，新环境按本手册准备自己的备份和恢复操作。
+
+`lightlayer-zh`（2026-11-23 上线）的备份与工具在 `/root/vps-proxy-rollout-20261123/`（适配版源码副本在仓库 `tools/rollout-lightlayer-zh.py`），`rollout.py` 由四台版本适配而来：域名固定为机器自带的节点域名、路由模板直接采用移除 `geosite:cn` 后的规则链、Xray 与先行各台统一为 26.11.9（`xray-new` 随目录预置）。`web`、`harden`、`cutover`、`publish` 与 `rollback-*` 语义不变。其 `cutover` 事务额外完成两项：把旧 Reality 入站置为 `exclude_from_sub`（入站保持运行，待观察期后按第 6 节退役）、把原 Hysteria 2 入站的备注改为 `lightlayer-zh-hysteria2`；`rollback-cutover` 会一并还原。面板管理端口已收口回环，订阅仍由原有的公网订阅端口提供，均使用同一泛域名证书。
+
+`lightlayer-zh` 上线同日加装 1Panel v2.5.1（对齐 raksmart/bitsflow）：无交互安装（面板端口、随机入口路径与凭据存于机内 `/root/1panel-credentials`，面板端口防火墙 REJECT 非回环并持久化）；OpenResty 应用经 `/etc/1panel/agent.sock` 的 `POST /api/v2/apps/install` 安装（params 必须带全量 env，缺 `WEBSITE_DIR` 或 `PANEL_APP_PORT_HTTPS` 会分别导致卷路径为空、默认站点 `listen 0` 崩溃循环）；此后回环 8443 回源、`.vps-proxy-origin` 证书版本目录与续签换链（WRAP → `rollout.py renew`）全部迁至 OpenResty，apt nginx 已 disable 保留作回退。面板另经公网 443 Reality 回落以 `panel.<节点域名>` 反代暴露（conf.d 手写站点 + `sites/…/proxy`，证书引用 `.vps-proxy-origin/current`）。带 1Panel 的三台面板地址同日统一为这一格式；raksmart 与 bitsflow 的迁移与回滚脚本在各自 `/root/panel-align-<主机别名>.sh`。1Panel 应用商店目录在 agent 启动时若 CDN 超时会挂起，`systemctl restart 1panel-agent` 可重触发同步。
