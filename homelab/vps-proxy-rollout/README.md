@@ -66,7 +66,7 @@ curl --noproxy '*' --max-time 8 -fsS -o /dev/null -w '%{http_code}\n' \
 
 三台 VPS（`raksmart`、`bitsflow`、`lightlayer-zh`）使用 1Panel OpenResty，`lightlayer` 使用 nginx。1Panel 新建或保存站点、更新 OpenResty 或续签证书后，复查站点仍使用回环 8443、原有 IPv6 监听正常、Xray 仍独占 IPv4 TCP 443。证书的续签需要让 Web 服务和 Hysteria 2 都加载到新证书。
 
-`lightlayer-zh`（2026-11-23 上线，CN 优化线路）按同一手册部署，几点差异：节点域名沿用机器自带的域名（泛域名证书，acme.sh `dns_cf` 续签），不遵循 `<主机别名>.haoqi90.top` 的命名；原有两个入站保留运行但移出订阅，其中 Hysteria 2 入站改名 `lightlayer-zh-hysteria2`（UDP 端口、跳跃范围与 Salamander 不变）。上线同日加装 1Panel v2.5.1 对齐 raksmart/bitsflow：OpenResty 应用经 agent.sock 自动化安装并接管回环 8443 回源（rollout 续签链路已切到 OpenResty，apt nginx 已停用）；面板管理端口仅回环/SSH 隧道可达（防火墙 REJECT 非回环），同时经公网 443 的 Reality 回落提供登录页，站点证书直接引用 `.vps-proxy-origin/current` 随续签换链。
+`lightlayer-zh`（2026-11-23 上线，CN 优化线路）按同一手册部署，几点差异：节点域名沿用机器自带的域名（泛域名证书，acme.sh `dns_cf` 续签），不遵循 `<主机别名>.haoqi90.top` 的命名；原 Hysteria 2 入站改名 `lightlayer-zh-hysteria2`（UDP 端口、跳跃范围与 Salamander 不变）；原非 443 的 Reality 入站于 2026-11-24 退役，现网只有 TCP 443 的 Reality 与同机 Hysteria 2。上线同日加装 1Panel v2.5.1 对齐 raksmart/bitsflow：OpenResty 应用经 agent.sock 自动化安装并接管回环 8443 回源（rollout 续签链路已切到 OpenResty，apt nginx 已停用）；面板管理端口仅回环/SSH 隧道可达（防火墙 REJECT 非回环），同时经公网 443 的 Reality 回落提供登录页，站点证书直接引用 `.vps-proxy-origin/current` 随续签换链。
 
 带 1Panel 的三台（`raksmart`、`bitsflow`、`lightlayer-zh`）的面板地址于 2026-11-23 统一为 `panel.<节点域名>`，`lightlayer` 未装 1Panel。这些记录只做 DNS 解析、不开 CDN 代理：客户端连到公网 443，经 Reality 回落到 OpenResty 的回环 8443，再由按 SNI 匹配的站点反代到面板端口。实际主机名、端口与入口路径保存在各机的私有运维记录中。
 

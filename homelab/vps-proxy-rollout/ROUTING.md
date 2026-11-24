@@ -4,7 +4,7 @@
 
 ## 现有规则与用途
 
-四台现有 VPS（`raksmart`、`bitsflow`、`lightlayer`、`lightlayer-zh`；`nosla` 已退役）依下表顺序匹配，首条匹配的规则生效。办公域名、健康检查和 `geoip:cn` 的匹配范围限于当前 Reality 和 Hysteria 2 入站。`lightlayer-zh` 上线即采用同一规则链，gated 入站为保留待退役的旧 Reality 入站、原 Hysteria 2 入站与 `in-443-tcp`。
+四台现有 VPS（`raksmart`、`bitsflow`、`lightlayer`、`lightlayer-zh`；`nosla` 已退役）依下表顺序匹配，首条匹配的规则生效。办公域名、健康检查和 `geoip:cn` 的匹配范围限于当前 Reality 和 Hysteria 2 入站。`lightlayer-zh` 上线即采用同一规则链，gated 入站为原 Hysteria 2 入站与 `in-443-tcp`（旧 Reality 入站退役时标签已一并清理）。
 
 | 顺序 | 规则 | 用途与适用条件 |
 | --- | --- | --- |
