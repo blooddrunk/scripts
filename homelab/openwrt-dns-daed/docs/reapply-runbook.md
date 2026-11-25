@@ -68,11 +68,11 @@ sh /root/openwrt-dns-daed/openwrt-dns-daed.sh install
 
 | 分组 | 订阅 | 过滤正则 | 策略 | 用途 |
 |---|---|---|---|---|
-| `proxy` | `main` | `raksmart-reality\|lightlayer-zh-reality` | `min_moving_avg` | 日常代理；承载 fallback DoH |
+| `proxy` | `main` + `backup` | `main` 用 `raksmart-reality\|lightlayer-zh-reality`；`backup` 用 `reality` | `min_moving_avg` | 日常代理；承载 fallback DoH |
 | `ai`（即 `DAED_GROUP_PREMIUM`） | `main` | 同上 | `min_moving_avg` | AI 服务、支付、自建 Access |
 | `tailscale-ctrl` | `main` + `backup` | `main` 同上；`backup` 用 `reality` | `min_moving_avg` | headscale 控制面（可选） |
 
-公司网络下组里不要收 hy2 节点（约每小时翻动一次），也不要把 `backup` 加进 `proxy`（bitsflow 的 Reality 节点延迟最低，会成为主力）；从本地不可达的节点同样要排除，`main` 因此用显式名单而不是笼统的 `reality`。依据见 README「公司路由器现行方案」。
+公司网络下组里不要收 hy2 节点（约每小时翻动一次），bitsflow 的 Reality 节点延迟最低，放进 `proxy` 就是主力（公司两台接受这一点，AI 仍只走美国两台）；从本地不可达的节点同样要排除，`main` 因此用显式名单而不是笼统的 `reality`。依据见 README「公司路由器现行方案」。
 
 ### 5.3 全局（配置 → 全局）
 

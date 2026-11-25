@@ -8,9 +8,9 @@
 #
 # 分组模型以 README「公司路由器现行方案（2026-11-25 起）」为准。
 # 依赖的 daed 分组（须先创建，名称一致）:
-#   proxy            日常代理：美国线路的 Reality 节点（同时承载 fallback DoH）
+#   proxy            日常代理：bitsflow + 美国线路的 Reality 节点（同时承载 fallback DoH）
 #   ai               AI / 支付：与 proxy 相同的美国节点，永不含 bitsflow
-#   tailscale-ctrl   Headscale 控制面：proxy 的节点 + bitsflow-reality
+#   tailscale-ctrl   Headscale 控制面：与 proxy 相同的节点
 # 组的过滤用显式名单（如 raksmart-reality|lightlayer-zh-reality），不要笼统写 reality：
 # hy2 节点在公司网络下约每小时翻动一次；不可达的节点每次 reload 后的二三十秒内
 # 会被先当作可用，承载 DoH 时造成国外域名解析超时。
