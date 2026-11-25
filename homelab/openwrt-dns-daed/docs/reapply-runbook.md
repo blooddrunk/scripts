@@ -1,6 +1,6 @@
 # 新路由器 Reapply Runbook（2026-10-30 实战版）
 
-> 目标：把本仓库方案 + 当日全部改进（`doh` 跨 VPS DoH 承载组、`routing-extra.dae` 附加规则、`check_tolerance` 选点粘性）完整重放到另一台 OpenWrt 路由器。
+> 目标：把本仓库方案（`routing-extra.dae` 附加规则、`check_tolerance` 选点粘性、公司路由器现行分组模型）完整重放到另一台 OpenWrt 路由器。**分组模型以 README「公司路由器现行方案（2026-11-25 起）」为准**；本文里与它冲突的旧说法（独立 `doh` 组、`premium` 组等）属于 2026-10-30 版本，不再适用。
 >
 > 产物分三层，职责不同：
 >
@@ -15,7 +15,7 @@
 ## 0. 前提
 
 - OpenWrt 24.10+（fw4/nftables），SSH 可用；`daed` 已安装（kenzok8/openwrt-daede），`/dev/net/tun` 就绪；
-- 自建 VPS 若干（示例三台：`nosla`、`bitsflow`、`lightlayer`=premium 线路），每台 **Reality(tcp) + Hysteria2(udp) 双入口**；
+- 自建 VPS 若干（示例：三台美国线路 + 一台备机 `bitsflow`），每台 **Reality(tcp) + Hysteria2(udp) 双入口**；
 - 占位符约定与仓库一致：IP 用 `203.0.113.10/20/30`，域名用 `*.example.top`。
 
 ## 1. 安装脚本（生成 conf 模板）
@@ -48,7 +48,7 @@ mkdir -p /etc/openwrt-dns-daed.d
 vi /etc/openwrt-dns-daed.d/routing-extra.dae
 ```
 
-内容模板见 [examples/routing-extra.dae.example](../examples/routing-extra.dae.example)，承载 install 不生成的全部附加规则：hy2 回程 `sip`、STUN 3478、headscale 控制面/DERP 锁出口、自建 CF Access、Google 显式代理、**fallback DoH 钉到 `doh` 组**、Cloudflare Tunnel 直连。插入位置由脚本保证（endpoint 规则之后），规则与 CN/私网规则目标无重叠。
+内容模板见 [examples/routing-extra.dae.example](../examples/routing-extra.dae.example)，承载 install 不生成的全部附加规则：hy2 回程 `sip` 与跳跃段、STUN 3478、headscale 控制面、自建 CF Access、Google 显式代理、**fallback DoH 钉到 `proxy` 组**、Cloudflare Tunnel 直连、Reality 443 入口。插入位置由脚本保证（endpoint 规则之后），规则与 CN/私网规则目标无重叠。
 
 ## 4. 重跑 install 生成片段
 
@@ -62,17 +62,17 @@ sh /root/openwrt-dns-daed/openwrt-dns-daed.sh install
 
 ### 5.1 订阅与节点命名
 
-按 VPS 组织订阅（如 main / premium / JP / DE）。**节点命名建议带协议与线路**（`xx-reality-tcp-…`、`xx-hysteria2`）——第 5.2 步 `doh` 组用 `hysteria2|reality` 正则过滤节点，命名规范是前提。
+两个订阅：`main`（美国线路）与 `backup`（bitsflow）。不要再建"同一集合再加区域筛选"的订阅——美国档里只剩美国节点时它和 `main` 返回同样的结果。**节点命名要带协议**（`xx-reality-tcp-…`、`xx-hysteria2`），第 5.2 步的 `reality` 过滤依赖它。
 
 ### 5.2 分组（配置 → 分组）
 
-| 分组 | 成员 | 过滤正则 | 策略 | 用途 |
+| 分组 | 订阅 | 过滤正则 | 策略 | 用途 |
 |---|---|---|---|---|
-| `proxy` | 主订阅全量 | — | `min` | 日常代理（hy2+reality 混合无妨） |
-| `premium` | premium 订阅全量（单 VPS 时保持独占） | — | `min` | 出口质量敏感规则（anthropic/paypal/自建 Access） |
-| `doh` | **每台 VPS 的订阅各加一个** | `hysteria2\|reality` | `min` | fallback DoH 专用承载：**跨 VPS + 协议多样**（两条硬要求，2026-11-02 修订：reality-only 会被协议级封锁团灭，见 README「fallback DoH 上游钉到 doh 专用组」） |
-| `tailscale-ctrl` | 出口在 headscale 控制面 VPS 本机的订阅 | `hysteria2` | `min` | 控制面锁出口（排除翻动 reality 被 min=0s 抢占，2026-11-02） |
-| `tailscale-derp` | 出口在 DERP VPS 本机的订阅 | `hysteria2` | `min` | DERP 锁出口（同上） |
+| `proxy` | `main` | `raksmart-reality\|lightlayer-zh-reality` | `min_moving_avg` | 日常代理；承载 fallback DoH |
+| `ai`（即 `DAED_GROUP_PREMIUM`） | `main` | 同上 | `min_moving_avg` | AI 服务、支付、自建 Access |
+| `tailscale-ctrl` | `main` + `backup` | `main` 同上；`backup` 用 `reality` | `min_moving_avg` | headscale 控制面（可选） |
+
+公司网络下组里不要收 hy2 节点（约每小时翻动一次），也不要把 `backup` 加进 `proxy`（bitsflow 的 Reality 节点延迟最低，会成为主力）；从本地不可达的节点同样要排除，`main` 因此用显式名单而不是笼统的 `reality`。依据见 README「公司路由器现行方案」。
 
 ### 5.3 全局（配置 → 全局）
 
@@ -92,9 +92,9 @@ DNS / Routing 标签页用生成片段**整体替换**保存，然后：
 ```sh
 sh /root/openwrt-dns-daed/openwrt-dns-daed.sh check          # 期望 0 FAIL
 grep -c "no proper dialer" /var/log/daed/daed.log             # 新窗口期应为 0
-grep "group=doh" /var/log/daed/daed.log | tail                # 应列出跨 VPS 的 hy2/reality 节点及延迟
+grep "group=proxy" /var/log/daed/daed.log | tail                # 应列出美国三台的 reality 节点及延迟
 nslookup www.baidu.com 192.168.10.1 && nslookup www.google.com 192.168.10.1
-grep "Health check will only verify" /var/log/daed/daed.log | tail -1   # outbounds 应含 doh
+grep "Health check will only verify" /var/log/daed/daed.log | tail -1   # outbounds 应含 proxy/ai（及 tailscale-ctrl）
 ```
 
 ## 7. 附录：无 GUI 时的直改库流程（高级，慎用）
@@ -102,6 +102,8 @@ grep "Health check will only verify" /var/log/daed/daed.log | tail -1   # outbou
 > **先检查管理通道是否依赖 daed（2026-10-30 实战教训）**：若这台路由器只能经 tailnet/自建 DERP 访问，而 DERP 流量本身又由 daed 分组承载（`tailscale-ctrl` 等），则**停 daed = 自断管理通道**。在这种设备上绝不能用「SSH 里跑一长串 stop→改→start」的裸流程——连接中途断开就会把 daed 永远停在 stopped，只能现场断电。安全做法：把整个变更写成一个**自愈式一次性脚本**放到路由器上，脱离会话执行；并在动手前预置一条兜底延时启动（见下）。
 >
 > **注意 `nohup` 并不总在（2026-11-02 实战）**：Kwrt 部分构建的 busybox 不带 `nohup` applet，模板直接报 `nohup: command not found`、脚本静默未执行。用 `setsid` 等价替代（先 `command -v setsid` 确认），并务必 `</dev/null` 重定向 stdin。下方模板已改为 setsid 写法（有 nohup 的设备两者等价）。
+
+> **优先走 GraphQL**：分组、订阅、Routing 都可以用 daed 的 GraphQL 接口改（`http://<路由器>:2023/graphql`，用面板账号对应的 JWT 认证），不碰 `wing.db` 就没有 WAL 损坏的风险。2026-11-25 的公司路由器改造全程走接口完成。下面的直改库流程仅作存档，其中的 `doh` 分组是旧模型。
 
 远程自动化或无法访问 GUI 时可直改 `wing.db`（本流程 2026-10-30 实战验证）。脚本本身仍不写库，此为人工操作：
 
@@ -137,7 +139,7 @@ grep "Health check will only verify" /var/log/daed/daed.log | tail -1   # outbou
 上游隧道对国际方向 :443 实测 MTU≈1280，超尺寸段静默丢弃（完整分析见 [troubleshooting 情况 N](troubleshooting.md)）。重放本手册**不会**覆盖这两项，但路由器重置/重装会丢，恢复清单：
 
 1. `/etc/nftables.d/20-mss-clamp.nft` —— fw4 include，output/forward 链把 SYN 上 `MSS>1240` 钳到 1240（模板见 README「上游 MTU 黑洞加固」）；
-2. `uci` 的三条 `vpsmtu*` /32 mtu 1280 主机路由（nosla / bitsflow / lightlayer 三台 VPS）。
+2. `uci` 的 `vpsmtu*` /32 mtu 1280 主机路由——**每台在用的 VPS 一条**，新增 VPS 后同步补（2026-11-25 补齐了 lightlayer-zh）。
 
 验收：路由器本机 `curl https://relay.haoqi90.top/` 1s 内返回 401/200，daed 日志无 `failed to dial <VPS>:443`。
 

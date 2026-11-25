@@ -5,54 +5,62 @@
 #
 # install 生成 daed-routing.dae 时会把本文件整体插入到
 # 「节点 endpoint 规则之后、组播/私网/CN 规则之前」。
-# 本文件中的规则目标均不与 CN/私网规则重叠，位置语义安全。
 #
-# 依赖的 daed 分组（须先在 GUI 创建，名称一致）:
-#   doh              跨 VPS、跨协议的 DoH 承载组（如 JP hy2|reality + US raksmart）
-#   tailscale-ctrl   出口在 headscale 控制面 VPS 本机的节点
-#   tailscale-derp   出口在 DERP VPS 本机的节点
+# 分组模型以 README「公司路由器现行方案（2026-11-25 起）」为准。
+# 依赖的 daed 分组（须先创建，名称一致）:
+#   proxy            日常代理：美国线路的 Reality 节点（同时承载 fallback DoH）
+#   ai               AI / 支付：与 proxy 相同的美国节点，永不含 bitsflow
+#   tailscale-ctrl   Headscale 控制面：proxy 的节点 + bitsflow-reality
+# 组的过滤用显式名单（如 raksmart-reality|lightlayer-zh-reality），不要笼统写 reality：
+# hy2 节点在公司网络下约每小时翻动一次；不可达的节点每次 reload 后的二三十秒内
+# 会被先当作可用，承载 DoH 时造成国外域名解析超时。
+# 占位: .10/.20/.30 = 三台美国 VPS，.40 = bitsflow
 # ============================================================
 
 # ---- Hysteria2 回程与跳跃段精确直连（install 不会生成，须在此维护）----
-# install 按 NODE_ENDPOINTS 生成固定口 dip 规则；此处补三样：
-# 1) 各固定口回程 sip(sport)
-# 2) mport 端口跳跃段（dip/sip 出入向都要放行，漏掉会落入
-#    fallback: proxy 形成代理回环；示例跳跃段 40000-41000）
-# 3) 见文件末尾：Reality TCP 443 入口（不能进 NODE_ENDPOINTS，原因见下）
+# 这些规则只约束 LAN 客户端与本机其它进程：daed 自身的出流带内部 mark，
+# 不经过它自己的转发面，所以「节点可用」不依赖本段。
+# 固定口 dip 规则由 install 按 NODE_ENDPOINTS 生成；此处补：
+# 1) 各固定口回程 sip（sport）
+# 2) 共用的 mport=48000-50000 跳跃段（dip/sip 出入向都要放行，
+#    漏掉会落入 fallback: proxy 形成代理回环）
 sip(203.0.113.10/32) && l4proto(udp) && sport(50757) -> must_direct
 sip(203.0.113.20/32) && l4proto(udp) && sport(47777) -> must_direct
-dip(203.0.113.10/32, 203.0.113.20/32) && l4proto(udp) && dport(40000-41000) -> must_direct
-sip(203.0.113.10/32, 203.0.113.20/32) && l4proto(udp) && sport(40000-41000) -> must_direct
+sip(203.0.113.30/32) && l4proto(udp) && sport(15672) -> must_direct
+sip(198.51.100.40/32) && l4proto(udp) && sport(47625) -> must_direct
+dip(203.0.113.10/32, 203.0.113.20/32, 203.0.113.30/32, 198.51.100.40/32) && l4proto(udp) && dport(48000-50000) -> must_direct
+sip(203.0.113.10/32, 203.0.113.20/32, 203.0.113.30/32, 198.51.100.40/32) && l4proto(udp) && sport(48000-50000) -> must_direct
 
 # ---- STUN (UDP 3478) 直连：含 LAN 客户端与路由器自身的 NAT 穿越 ----
 l4proto(udp) && dport(3478) -> direct
 
-# ---- Headscale 控制面 / DERP：出口锁定在目标 VPS 本机 ----
-# 控制面域名与所在 VPS 调整后（如主控迁移）记得同步这里
-domain(suffix: hs-raksmart.example.top) -> tailscale-ctrl
-domain(suffix: hs-bitsflow.example.top) -> tailscale-derp
+# ---- Headscale 控制面 / DERP：走 tailscale-ctrl 组 ----
+# 成员=美国三台 + bitsflow 的 Reality 节点：控制面流量极小，优先保可用性
+domain(suffix: hs.example.top) -> tailscale-ctrl
 
-# ---- 自建 Cloudflare Access 应用走 premium 出口 ----
+# ---- 官方 DERP / log 直连：不依赖代理出口（daed 停机时兜底仍可用） ----
+domain(suffix: tailscale.com) -> direct
+
+# ---- 自建 Cloudflare Access 应用走 ai 出口 ----
 # （须位于下方 cloudflareaccess.com 的 must_direct 之前）
-domain(full: access.example.top) -> premium
+domain(full: access.example.top) -> ai
 
-# ---- Google / Gemini 显式代理，优先于 geosite:cn 和 geoip:cn ----
-domain(
-    geosite:google-deepmind,
-    geosite:google
-) -> proxy
+# ---- Google 系显式代理，优先于 geosite:cn 和 geoip:cn ----
+# 本文件会被生成脚本插在「AI 规则块」之前，所以这里显式排除 AI/支付分类，
+# 保证无论规则顺序如何，这些域名最终都落到 ai 组
+domain(geosite:google-deepmind, geosite:google) && !domain(geosite:openai, geosite:anthropic, geosite:google-gemini, geosite:xai, geosite:perplexity, geosite:paypal) -> proxy
 
-# ---- fallback DoH 上游钉到跨 VPS 的 doh 组 ----
-# 不押单台 VPS；承载组应跨 VPS 且协议多样（reality+hysteria2），
-# 成员变更后同步更新这条注释，避免注释与实际分组脱节。
+# ---- fallback DoH 上游钉到 proxy 组 ----
+# 与业务流量同出口，DNS 地理答案与实际出口一致；
+# proxy 只含美国三台、跨 VPS 的 Reality 节点
 # dip 打底：1.1.1.1/1.0.0.1 为 IP 形式拨号、无 SNI，domain 规则匹配不到；
 # 104.16.248.249/249 为 cloudflare-dns.com 的固定 A 记录兜底
-dip(1.1.1.1/32, 1.0.0.1/32, 104.16.248.249/32, 104.16.249.249/32) -> doh
+dip(1.1.1.1/32, 1.0.0.1/32, 104.16.248.249/32, 104.16.249.249/32) -> proxy
 # domain 覆盖 A 记录漂移与其它带该 SNI 的流量（如浏览器自带 DoH）
-domain(suffix: cloudflare-dns.com) -> doh
+domain(suffix: cloudflare-dns.com) -> proxy
 
 # ---- Cloudflare Tunnel：cloudflared 隧道边缘与 Access 校验直连 ----
-# （自建 Access 域名已在上方先命中 premium，不受影响）
+# （自建 Access 域名已在上方先命中 ai，不受影响）
 domain(
     suffix: argotunnel.com,
     suffix: cftunnel.com,
@@ -67,4 +75,4 @@ dip(198.41.192.0/24, 198.41.200.0/24) && l4proto(udp) && dport(7844) -> must_dir
 # 带 SNI 的流量先被上面的域名规则接走，剩余按裸 IP 直连的才是节点入口。
 # 也因此不要把 443 写进 NODE_ENDPOINTS（那会生成在文件顶部、
 # 抢在域名规则前面，把 Headscale 等同机服务一并 must_direct）。
-dip(203.0.113.10/32, 203.0.113.20/32) && l4proto(tcp) && dport(443) -> must_direct
+dip(203.0.113.10/32, 203.0.113.20/32, 203.0.113.30/32, 198.51.100.40/32) && l4proto(tcp) && dport(443) -> must_direct

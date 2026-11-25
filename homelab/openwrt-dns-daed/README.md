@@ -13,6 +13,7 @@
 ## 目录
 
 - [背景与架构](#背景与架构)
+- [公司路由器现行方案（2026-11-25 起）](#公司路由器现行方案2026-11-25-起)
 - [环境要求](#环境要求)
 - [快速开始](#快速开始)
 - [首次部署流程](#首次部署流程)
@@ -63,6 +64,116 @@ REJECT（阻止绕过路由器 DNS）
 
 ---
 
+## 公司路由器现行方案（2026-11-25 起）
+
+两台公司路由器（router-my-workspace、router-qi-workspace）的 daed 分组、订阅和 Routing 已按本节简化。DNS 的两条链路不变（仍是上文的链路 A / 链路 B）。本节之后凡与本节冲突的旧描述，以本节为准。
+
+### 一句话
+
+**日常流量在 raksmart 和 lightlayer-zh 两台美国 VPS 的 Reality 节点里，自动选"当前健康且延迟最低"的那个；AI 和支付走同一批美国节点；bitsflow 只留在 tailnet 控制面分组里保底。**
+
+### 现在是怎么跑的
+
+```text
+LAN 客户端的国外流量
+   │
+   ├─ 普通流量、fallback DoH ─────────▶ proxy
+   │                                   raksmart-reality ─ lightlayer-zh-reality
+   │                                   （min_moving_avg：谁健康且延迟低用谁）
+   │
+   ├─ OpenAI / Anthropic / Gemini / xAI / Perplexity / PayPal / 自建 Access ──▶ ai
+   │                                   同样这两个美国 Reality 节点（不会出自 bitsflow）
+   │
+   └─ hs.haoqi90.top（Headscale 控制面、内嵌 DERP）──────────────────────────▶ tailscale-ctrl
+                                       上面两个 + bitsflow-reality
+```
+
+| 组 | 订阅与过滤 | 成员 | 用途 |
+|---|---|---|---|
+| `proxy` | `main`，`raksmart-reality\|lightlayer-zh-reality` | raksmart、lightlayer-zh 的 Reality 节点 | 日常代理；承载 fallback DoH；`fallback` 出口 |
+| `ai` | `main`，同上 | 同上两个 | AI 服务、PayPal、自建 Cloudflare Access 应用 |
+| `tailscale-ctrl` | `main` 同上，再加 `backup`（`reality`） | 上面两个 + bitsflow-reality | Headscale 控制面域名 |
+
+三个组的策略都是 `min_moving_avg`，配合全局 `check_tolerance: 50ms`：挑战者要比现任快 50ms 以上才接班，现任挂了立即换人，恢复后同样要快出 50ms 才切回。
+
+### 为什么组里只放 Reality 节点
+
+2026-11-24～25 取两台路由器各约 43 小时的 daed 日志，只看公司网络实际使用的 IPv4 流量维度：
+
+| 节点 | 实际表现 |
+|---|---|
+| raksmart-reality | 全程可用，零翻动 |
+| lightlayer-zh-reality | 基本全程可用 |
+| lightlayer-hysteria2、lightlayer-zh-hysteria2 | 约每小时一次"活→死"，约 85% 的时间存活 |
+| raksmart-hysteria2、bitsflow-hysteria2、老 lightlayer 的 Reality 节点 | 全程不可达 |
+
+hy2 节点存活时延迟更低，会被选中承载流量，几十分钟后死掉时连接跟着断。改之前 `proxy` 组的出口每 7～8 分钟换一次节点（43 小时 338 次）。把 hy2 移出后，组里只剩两条稳定的线路。
+
+日志里的 tcp6 / udp6 翻动可以忽略：公司 LAN 已关 IPv6，这些维度不承载实际流量。
+
+**不可达的节点要从组里去掉，而不是留着"反正不会被选"。** 每次 reload 之后，daed 会先把组里的全部节点当作可用，直到第一次检测把死节点判掉，这段时间有二三十秒。老 lightlayer 的 Reality 节点从公司网络全程不可达，留在 `proxy` 里时，每次 reload 后的这段时间 DoH 都可能被分到它上面，国外域名解析超时：2026-11-25 在 qi 上实测，一次 reload 后出现 6 次 DoH 上游超时、3 次 SERVFAIL；把该节点从组里排除后，同样的 reload 之后是 0 次，重载后立即连发 15 个国外域名全部解析成功。
+
+所以 `main` 的过滤用的是显式名单 `raksmart-reality|lightlayer-zh-reality`，而不是笼统的 `reality`。以后往 `main` 里加新的美国 VPS，要同步把它的 Reality 节点名加进这个正则（`proxy`、`ai`、`tailscale-ctrl` 三处）。
+
+### 为什么 bitsflow 不在 `proxy` 里
+
+bitsflow 的 Reality 节点从公司网络测出来延迟最低，**各时段约 95% 以上的时间都排第一**（不只是晚上）。把它放进同一个自动组，它会成为主力而不是兜底。daed 没有"只有其它节点都挂了才用某个节点"的表达方式，所以 bitsflow 不进日常组；需要它接管时手动加（见下方"应急"）。
+
+### 关于"AI 优先走 lightlayer，挂了用 raksmart，再挂用 bitsflow"
+
+**daed 做不到严格优先级。** 2026-11-25 逐项核实过（路由器上的 daed 2026.11.09，即 dae-wing）：
+
+- 策略只有 `random` / `fixed` / `min_avg10` / `min_moving_avg` / `min` 五种；`fallback`、`priority` 等会被接口直接拒绝。
+- dae 核心支持给单个节点加延迟偏移（`[add_latency: …]`）来实现优先级，但 dae-wing 生成配置时不暴露它。
+- 路由规则只能指向一个组，不能在组之间做兜底。
+
+所以能做到的是：lightlayer-zh 状态更好时自动用它，变差或挂掉时自动换 raksmart，恢复后自动切回。这比"固定优先"少了一层保证——它不承诺"只要 lightlayer 活着就一定用它"。公司网络的实测也说明这一点意义有限：老 lightlayer 从这里完全不可用，lightlayer-zh 与 raksmart 在不同时段轮流领先，没有固定优劣。
+
+另外两点需要知道：
+
+- `ai` 与 `proxy` 目前的成员完全相同。这是"bitsflow 不进日常组"的直接结果——在 daed 里，AI 与日常流量只能共用同一批候选。保留 `ai` 是为了让两者在需要时可以分开：比如以后决定让 bitsflow 承载日常流量，只要把 `backup` 加进 `proxy`，AI 仍然只走美国线路。
+- 如果想要"AI 固定走 lightlayer-zh"，可以把 `ai` 组只绑 lightlayer 的节点，但那样 lightlayer-zh 挂了 AI 就不可用。未采用。
+
+### 订阅与刷新节奏
+
+| 订阅 | 内容 | 说明 |
+|---|---|---|
+| `main` | MySub `profile=main`：raksmart、lightlayer、lightlayer-zh | 原标签在 qi 上是 `main-hy2`，已统一为 `main` |
+| `backup` | MySub `profile=backup`：bitsflow | 原标签 `JP` |
+
+原来的 `premium` 订阅是 MySub `profile=main&region=US`。nosla 退役后 main 档只剩美国节点，`region=US` 成了空操作，两个订阅返回完全相同的节点——这就是"main 和 premium 结果一样"的原因。该订阅和同名分组已删除。
+
+**每次订阅刷新或应用配置，daed 都会冷重启一次**：丢弃所有已建立的连接，持续约 10～16 秒；其中切换控制面的几秒钟里，流量不经代理、直接从公司网络出网（2026-11-25 在 my 上实测到出口变成公司公网 IP）。改之前两台每天 11～16 次（daed 内部定时 8～12 次，加上 LuCI 每天 9:17 刷新每个订阅各一次），都落在工作时间。现在：
+
+- daed 内部的订阅定时全部关闭（`cron_enable=false`）；
+- 只保留 LuCI 的每日刷新，时间从 9 点改到凌晨 4 点（`daed.config.subscribe_update_hour=4`，cron 为 `17 4 * * *`），与同样会触发一次 reload 的 geo 更新放在同一个夜间时间窗。合计每天 3 次，全部在凌晨。
+
+代价是节点变更最多延迟一天才被自动拉取。手动改了 Sub-Store 之后想立即生效，在 daed 面板里点一次订阅更新即可。
+
+### 应急：让 bitsflow 接管日常流量
+
+美国线路都出问题时，一条变更即可把 bitsflow 的 Reality 节点加进 `proxy`（会触发一次 reload）：
+
+```graphql
+mutation { groupAddSubscriptions(id: "<proxy 组的 id>", subscriptionIDs: ["<backup 订阅的 id>"], nameFilterRegex: "reality") }
+```
+
+组与订阅的 id 用 `{ groups { id name } subscriptions { id tag } }` 查询。恢复后用 `groupDelSubscriptions(id: …, subscriptionIDs: […])` 移除。注意加上之后 bitsflow 通常会直接成为主力（原因见上）。
+
+### 源头文件与工具
+
+- 路由器上的 `/etc/openwrt-dns-daed.conf` 与 `/etc/openwrt-dns-daed.d/routing-extra.dae` 已同步到本方案（`DAED_GROUP_PREMIUM="ai"`、`PREMIUM_GEOSITES` 含 AI 分类、`NODE_ENDPOINTS` 去掉 nosla 并加入 lightlayer-zh）。改之前的副本带 `.bak-20261125` 后缀。
+- 生成脚本会把 `routing-extra.dae` 插在 AI 规则块**之前**，所以文件里的 Google 规则显式排除了 AI 分类，保证无论顺序如何这些域名都落到 `ai`。线上生效的 Routing 文本是手工调整过顺序的版本，以线上文本为准；`install` 重新生成的片段只作为起点。
+- 变更通过 daed 的 GraphQL 接口完成（`http://<路由器>:2023/graphql`），不直接改 `wing.db`。本次使用的脚本与备份在运维机上 `~/router-work-20261125/`、`~/router-backups-20261125/`（含凭据，不要外传）。
+
+### 其它同步修正
+
+- Routing 里已退役的 nosla（hy2 固定口、跳跃段、Reality 443 列表）全部移除；lightlayer-zh 的入口规则（hy2 固定口、跳跃段、Reality 443）补齐。
+- 两台各补了一条 lightlayer-zh 公网 IP 的 `/32 mtu 1280` 主机路由（见「上游 MTU 黑洞加固」）。
+- 未使用的 `tailscale-derp` 分组删除。
+
+---
+
 ## 环境要求
 
 | 组件 | 要求 | 说明 |
@@ -109,7 +220,7 @@ sh /tmp/odd.sh install
 2. 编辑 /etc/openwrt-dns-daed.conf —— 填入你的真实节点 endpoint、内网域名等
 3. （推荐）放置 /etc/openwrt-dns-daed.d/routing-extra.dae 附加规则（模板见 examples/）
 4. 再次运行 install —— 用你的配置重新生成 daed 片段与 GUI 设置清单
-5. 打开 daed GUI：创建分组（proxy/premium/doh…）→ 设置全局/节点检测
+5. 打开 daed GUI：创建分组（proxy/ai/tailscale-ctrl…）→ 设置全局/节点检测
    → 粘贴 DNS / Routing 片段
 6. /etc/init.d/daed restart 重启（勿只用 UI 内的停止/启动），运行 check 复查
 ```
@@ -177,10 +288,10 @@ sh /tmp/odd.sh install --install-missing --restart-daed
 | `DAED_DNS_IPVERSION_PREFER` | `4` | daed DNS 遇到同时存在 A/AAAA 的域名时仅响应 A；留空则省略该设置并允许 IPv6 |
 | `DAED_DNS_SELF_DOMAINS` | `example.top` | 自建域名后缀（节点入口/Headscale 等，空格分隔）：生成 `qname(suffix: …) -> alidns` 直连解析行，避免 fallback DoH 承载组全灭时连坐节点域名解析；留空不生成 |
 | `DAED_GROUP_PROXY` | `proxy` | 普通代理组名，**必须与 daed 中实际组名一致** |
-| `DAED_GROUP_PREMIUM` | `premium` | 高级代理组名，同上 |
+| `DAED_GROUP_PREMIUM` | `premium` | 高级代理组名，同上。变量名为兼容脚本保留；**公司两台现用 `ai`**（见「公司路由器现行方案」），改这个值后重新生成片段 |
 | `NODE_ENDPOINTS` | 占位符 | **重点配置**。格式 `IP:协议:端口`，空格分隔；支持 IPv6（如 `2001:db8::1:tcp:443`）。只放行节点入口端口，不要对整台 VPS `/32` must_direct |
 | `DIRECT_INTERNAL_DOMAINS` | 占位符 | 内部/私有域名（公司内网域名等）直连；`geosite:private` 自动追加 |
-| `PREMIUM_GEOSITES` | `anthropic paypal` | 固定走 premium 组的 geosite（不含前缀）；留空则不生成该规则 |
+| `PREMIUM_GEOSITES` | `anthropic paypal` | 固定走高级代理组的 geosite（不含前缀）；留空则不生成该规则。**公司两台现用 `openai anthropic google-gemini xai perplexity paypal`**：以前 OpenAI 特例是注释掉的，因为当时 `premium` 与 `proxy` 成员相同、没有区分意义；两者分工明确后启用 |
 | `PROXY_CN_DOMAINS` | 小红书/NGA/雪球等 | 需强制走代理组的国内域名（在 geosite:cn 直连之前生效） |
 
 ### DoH 上游为什么用 IP 形式（v1.2.2 起默认）
@@ -295,6 +406,8 @@ function operator(proxies) {
 
 ### fallback DoH 上游钉到 doh 专用组（可选加固）
 
+> **2026-11-25 更新**：公司两台已不再使用独立的 `doh` 组，fallback DoH 改为钉到 `proxy`（见「公司路由器现行方案」）。原因是公司网络下 hy2 节点不可靠，承载组只能是 Reality 节点；而 `proxy` 本身就是跨 VPS 的 Reality 节点集合，DoH 与业务流量同出口还能让 DNS 的地理答案和实际出口一致（独立的 `doh` 组曾在 raksmart 与 bitsflow 之间来回切换，答案在美国/日本之间漂移）。本节其余内容保留为设计依据，适用于仍想用独立承载组的部署。
+
 **背景**：daed 自身对 fallback DoH 上游（如 cloudflare-dns.com）的查询也会被 dae 按 Routing 分流，通常命中 `fallback: proxy` 从节点出口发出——这也是国外域名 DNS 答案不被污染的原因。代价是 fallback DNS 的可用性 = 所选节点的可用性：当分组策略（如 `min_moving_avg`）选中 Hysteria2 节点、而其 UDP/QUIC 隧道受 QoS 抖动时，DoH 会跟着间歇失败（日志特征：`DNS forward to upstream failed dialer=xx-hysteria2 ... connect error: http3: ...`，该 `http3` 报错来自 Hysteria2 隧道层而非 DoH3）。
 
 **做法**：在 `fallback: proxy` 之前，把发往 DoH 上游的流量指向一个**专用 DoH 承载组**（下例命名为 `doh`；成员要求见下方「前提与取舍」）。支持 IP 与域名两种匹配写法，推荐**双写互为补充**：
@@ -325,10 +438,16 @@ domain(suffix: cloudflare-dns.com) -> doh
 3. **Hysteria2 的真正用武之地是大流量承载分组**（如 `proxy`）：丢包高/被限速的线路上吞吐通常优于 TCP 系代理，也避免了 TCP-in-TCP 恶化。按角色分工即可，不必全组追求纯 Reality。
 4. 只有一台 "premium" 线路 VPS 时：`premium` 组保留该 VPS 全部节点（hy2 + reality 协议多样性反而是优点），继续服务**按出口质量选路**的规则（anthropic/paypal 等）；另建跨 VPS 的 `doh` 组承载上面两条 DoH 规则。规则只影响发往 DoH 专用地址/带该 SNI 的流量，不影响其他 Cloudflare 服务。
 
-**关于「严格优先 premium、全挂才 fallback、恢复自动回归」**：dae 核心支持 `filter: name(节点) [add_latency: -500ms]` 延迟偏移（官方定位就是 latency-based failover——给 premium 节点负偏移，健康时永远最低必被选中，劣化/死亡自动让位，恢复自动回归）。但截至 2026-10 实测，daed 面板与 wing.db 均不支持该字段（分组策略枚举仅 `fixed/min/min_avg10/min_moving_avg/random`）。daed 下的两个折中：
+**关于「严格优先 premium、全挂才 fallback、恢复自动回归」**：dae 核心支持 `filter: name(节点) [add_latency: -500ms]` 延迟偏移（官方定位就是 latency-based failover——给 premium 节点负偏移，健康时永远最低必被选中，劣化/死亡自动让位，恢复自动回归）。但 daed 做不到，2026-11-25 在路由器上的 daed 2026.11.09 上逐项核实：
 
-- 合并 premium 与备用 Reality 节点为一个组，`min` 策略 + `check_tolerance`（如 50ms）粘性：premium 线路健康时通常延迟最低被选中，劣化自动切换；但平延迟时无保证，且恢复后需比现任节点快出 tolerance 才回归——对 IP 敏感服务意味着偶发换出口，需自行权衡；
-- 维持 premium 独占（本仓库默认）：严格保证出口，代价是单 VPS 故障期间这些服务不可用。
+- GraphQL 的策略枚举只有 `random` / `fixed` / `min_avg10` / `min_moving_avg` / `min`，`fallback`、`priority`、`select` 等值在校验阶段即被拒绝；
+- dae-wing 把每个分组渲染成一条 `name(节点…)` 过滤，不附带任何偏移注解，`add_latency` 无从下手；
+- 路由规则只能指向一个组，没有"这个组不可用就换那个组"的写法。
+
+daed 下可行的只有"把候选放进同一个组，按延迟自动选"（本仓库默认）。它的两个直接后果，决定了公司路由器现在的分组（详见「公司路由器现行方案」）：
+
+- **"只做兜底"的节点不能放进自动组**。公司网络下 bitsflow 的 Reality 节点约 95% 的时间延迟最低，放进去就是主力。要兜底只能手动应急加入。
+- **同一组里的两个节点延迟接近时会轮流领先**。想让出口更粘，调大全局 `check_tolerance`（现任要慢出容差才让位）；节点挂掉仍然立即切换，不受容差影响。
 
 两种落地方式：
 
@@ -361,6 +480,13 @@ dip(203.0.113.99/32) && l4proto(tcp) && dport(8443) -> must_direct
 
 ### 自建 Headscale 场景：控制面/DERP 域名按出口位置定向（2026-10-27 实战）
 
+> **2026-11-25 更新**：公司两台的 `tailscale-ctrl` 成员改为 raksmart、lightlayer-zh、bitsflow 的
+> **Reality** 节点（`main` + `backup` 订阅），不再包含 hy2 候选和老 lightlayer 的节点。
+> 原因：公司网络下 hy2 节点要么全程不可达、要么约每小时翻动一次，放进控制面
+> 分组会让长连接周期性中断；Reality 节点则全程稳定。控制面流量极小，多一条
+> 独立线路只为保 tailnet 可用。未使用的 `tailscale-derp` 分组已删除。详见
+> 「公司路由器现行方案」。
+>
 > **2026-11-20 单 Tailnet 更新**：固定控制域名 `hs.haoqi90.top` 的
 > `tailscale-ctrl` 应包含来自不同 VPS/订阅的至少两个可用 HY2 出口，
 > 不再永久锁定某一台 VPS。旧控制域名（hs-raksmart/hs-bitsflow）的
@@ -475,6 +601,8 @@ nft add rule  inet fw4 mss_clamp_forward 'oifname "eth1" tcp flags syn tcp optio
 
 > **为什么不是别的方案**：`TCPMSS` 钳制只重写 SYN 选项、管不住本机发送栈（本机必须靠主机路由 MTU）；把 WAN 口 MTU 全局降到 1280 会杀死 hysteria2 的 QUIC（实测 hy2 dialer 全灭、代理组下线）。组合拳 = TCP 走 /32 小 MTU、UDP/QUIC 走默认 1500。
 
+> **每台在用的 VPS 都要有一条**（换新 VPS/IP 后同步补）。2026-11-23 上线的 lightlayer-zh 两台都漏了，2026-11-25 补齐：`uci` 段 `network.vpsmtu5`，网关取自 WAN 默认路由。nosla 已退役，其路由（`vpsmtu1`）仍在，无害。
+
 ---
 
 ## daed 的手动步骤（GUI）
@@ -482,14 +610,15 @@ nft add rule  inet fw4 mss_clamp_forward 'oifname "eth1" tcp flags syn tcp optio
 daed 的配置保存在 `/etc/daed/wing.db`（SQLite 数据库）。按约定**本脚本绝不直接写库**，只生成片段并做只读检查；分组、全局/节点检测、DNS/Routing 都需要在 GUI 中手工完成一次（完整重放手册见 [docs/reapply-runbook.md](docs/reapply-runbook.md)）：
 
 1. 打开 daed 面板（LuCI → 服务 → daede，或独立面板地址）
-2. **配置 → 分组**：按下表创建（`doh` 组的设计依据见「fallback DoH 上游钉到 doh 专用组」；节点命名建议带协议，`doh` 组用 `hysteria2|reality` 正则过滤依赖它）
+2. **配置 → 分组**：公司两台现用的三个组如下（依据见「公司路由器现行方案」）。节点命名要带协议，下面的 `reality` 过滤依赖它
 
-   | 分组 | 成员 | 策略 | 用途 |
+   | 分组 | 订阅与过滤 | 策略 | 用途 |
    |---|---|---|---|
-   | `proxy`（同 `DAED_GROUP_PROXY`） | 主订阅全量（hy2+reality 混合无妨） | `min` | 日常代理 |
-   | `premium`（同 `DAED_GROUP_PREMIUM`） | premium 订阅全量（单 VPS 保持独占） | `min` | 出口质量敏感规则 |
-   | `doh` | 每台 VPS 的订阅各加一个 + `hysteria2\|reality` 过滤 | `min` | fallback DoH 承载：跨 VPS + 协议多样（两条硬要求） |
-   | `tailscale-ctrl` / `tailscale-derp` | 出口在对应 VPS 本机的节点 | `min` | headscale 锁出口（可选） |
+   | `proxy`（同 `DAED_GROUP_PROXY`） | `main` + 过滤 `raksmart-reality\|lightlayer-zh-reality` | `min_moving_avg` | 日常代理；承载 fallback DoH |
+   | `ai`（同 `DAED_GROUP_PREMIUM`） | `main` + 同上过滤 | `min_moving_avg` | AI 服务、支付等对出口敏感的规则 |
+   | `tailscale-ctrl` | `main` + 同上过滤，再加 `backup` + 过滤 `reality` | `min_moving_avg` | Headscale 控制面（可选） |
+
+   过滤留空表示收下该订阅的全部节点。公司网络下不要把 hy2 节点收进这些组（原因见「为什么组里只放 Reality 节点」），也不要把 bitsflow 放进 `proxy`（原因见「为什么 bitsflow 不在 `proxy` 里」）；不可达的节点同样要排除（原因见「为什么组里只放 Reality 节点」）。
 
 3. **配置 → 全局 / 节点检测**：参照 `/root/openwrt-dns-daed/daed/daed-global-settings.txt` 逐项填写；`check_tolerance` 建议 50ms（0 容差会在几 ms 差距间反复换节点）
 4. **配置 → DNS**：用 `/root/openwrt-dns-daed/daed/daed-dns.dae` 的内容整体替换并保存
@@ -525,7 +654,7 @@ routing {
     domain(suffix: example.corp, geosite:private) -> direct
     dip(geoip:private) -> direct
 
-    domain(geosite:anthropic, geosite:paypal) -> premium   # 需在 CN 规则之前
+    domain(geosite:openai, geosite:anthropic, geosite:google-gemini, geosite:xai, geosite:perplexity, geosite:paypal) -> ai   # 需在 CN 规则之前
     domain(suffix: xiaohongshu.com, ...) -> proxy          # 需在 CN 规则之前
 
     domain(geosite:cn) -> direct
@@ -670,6 +799,10 @@ sh /root/openwrt-dns-daed/openwrt-dns-daed.sh clean --purge   # 全部删除
 3. **`force_dns` 端口重定向**只覆盖 `LAN_IFACES` 指定的接口（默认 `lan`）。
 4. 默认 `ipversion_prefer: 4` 只影响 daed DNS，不会自动过滤 `https-dns-proxy` 链路返回的 AAAA（部分 daed 版本对自身处理的查询也不过滤）；需要硬保证时用 `DISABLE_IPV6="1"`。
 5. https-dns-proxy 未来版本的 UCI 选项如有变化，`check` 会以 FAIL 形式提示差异，便于及时发现。
+6. **daed 没有"优先级 / 兜底"策略**：只有"组内按延迟自动选"。想只做兜底的节点不能放进自动组，否则延迟一低就成了主力；需要时手动加入（见「公司路由器现行方案」的"应急"）。
+7. **订阅刷新和应用配置都会让 daed 冷重启**（丢弃所有已建立连接，约 10～16 秒）。daed 内部的订阅定时与 LuCI 的每日刷新是两套独立机制，同时开着会叠加；公司两台只保留凌晨 4 点的 LuCI 刷新。
+8. **daed 的 `parsedRouting` 干跑只查语法**：不存在的 `geosite` 分类也能通过。新增分类前要另外核对 `/usr/share/v2ray/geosite.dat` 里确实有它，否则应用时 reload 会失败并回滚到上一份配置。
+9. **daed 自身的出流不经过它自己的转发面**（带内部 socket mark）：节点入口的 `must_direct` 规则约束的是 LAN 客户端和路由器上的其它进程，不影响 daed 自己连节点。
 
 ---
 

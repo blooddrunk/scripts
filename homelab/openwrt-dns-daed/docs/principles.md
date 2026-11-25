@@ -107,6 +107,8 @@ dip(203.0.113.10/32) -> must_direct          # 错误示范
 1Panel / 其他端口       → 不命中，继续向下匹配 → fallback: proxy
 ```
 
+**这些规则约束的是谁**（2026-11-25 在公司路由器上实测确认）：LAN 客户端（例如自己跑 v2rayN 的电脑）和路由器上的其它进程。daed 自己连节点的流量带内部 socket mark，不经过它自己的转发面——所以新增一台 VPS 时忘了补入口规则，daed 的节点照样可用，受影响的只是 LAN 上直连该节点的客户端。不要因为"节点能用"就认为规则齐全。
+
 ### Reality 与网站共用 443 时，endpoint 规则要放在域名规则之后
 
 当 Reality 绑定公网 IPv4 TCP 443、与同机 Web/Headscale 共用端口时（见 `vps-proxy-rollout`），443 入口规则**不能**放在文件顶部的 endpoint 区，而要放在所有针对同 IP 域名的规则（Headscale 控制面、Cloudflare Access 等）之后：
@@ -135,17 +137,25 @@ sip(203.0.113.10/32) && l4proto(udp) && sport(40000-41000) -> must_direct
 2. 代理节点 endpoint 精确 must_direct（IP+协议+端口，勿整台 VPS /32；
    与同机服务共用 443 的 Reality 入口例外——放域名规则之后）
 3. 私网 / 组播 / 内部域名直连
-4. premium 特例（geosite:anthropic 等）
-5. proxy 特例（需要走代理的国内域名）
-6. 中国大陆 direct（geosite:cn / geoip:cn）
-7. fallback: proxy
+4. ai 特例（AI 服务与支付的 geosite 分类）
+5. Google 系显式代理（须排在 ai 特例之后，否则 Gemini 会被它先接走）
+6. proxy 特例（需要走代理的国内域名）
+7. 中国大陆 direct（geosite:cn / geoip:cn）
+8. fallback DoH 上游钉到 proxy
+9. fallback: proxy
 ```
 
-例如 `xiaohongshu.com` 虽然属于中国域名，但它的 `-> proxy` 规则写在 `geosite:cn -> direct` 之前，所以仍走代理。同理 Anthropic/PayPal 优先命中 premium。
+例如 `xiaohongshu.com` 虽然属于中国域名，但它的 `-> proxy` 规则写在 `geosite:cn -> direct` 之前，所以仍走代理。同理 AI 服务与 PayPal 优先命中 `ai`。
+
+规则是顺序匹配、命中即止，所以"兜底"只能体现在 `fallback` 上：没有规则可以表达"这个组不可用就换那个组"，组内成员挂了自动换人全靠分组策略。
+
+### 组里不要留不可达的节点
+
+grouping 策略只在"存活节点"里选，看起来不可达的节点放着也无妨，但每次 reload 之后的二三十秒里 daed 会先把组内全部节点当作可用，死节点要等第一次检测才会被判掉。这段时间 DoH 上游可能被分到死节点上，国外域名解析超时（2026-11-25 在 qi 上实测一次 reload 后 6 次 DoH 上游超时，排除该节点后为 0 次）。所以从本地不可达的节点要从组里排除，不要指望"反正不会被选"。
 
 ### 关于 OpenAI 特例
 
-`geosite:openai` 的 premium 特例默认**不启用**（保持注释状态）。需要时把它加入配置文件的 `PREMIUM_GEOSITES` 再重新生成即可。
+`geosite:openai` 的特例以前默认不启用，因为那时 `premium` 与 `proxy` 成员相同、区分没有意义。2026-11-25 起公司两台的高级组改名 `ai` 并明确为"只用美国线路"，OpenAI / Anthropic / Gemini / xAI / Perplexity 都归入其中（`PREMIUM_GEOSITES`）。扩展 AI 清单时用具体分类，不要用 `category-ai-!cn`——它混着模型下载类的大流量域名。
 
 ### 本地网络有 IPv6，但节点 IPv6 不一定可靠
 
@@ -159,6 +169,8 @@ IPv6:  不配置 TCP/UDP 节点检测地址
 ```
 
 这里的 `ipversion_prefer: 4` 会让同时有 A/AAAA 记录的域名仅响应 A、对 AAAA 返回空答案，但不是把所有路由器 IPv6 都关闭；节点 endpoint 仍按实际地址和端口生成 `must_direct`。节点检测也应使用 IPv4 目标，避免检测结果被一条不可用的 VPS IPv6 路径拖成超时或误判。
+
+dae 核心仍会按 tcp4 / tcp6 / udp4 / udp6 分别维护每个节点的存活状态，日志里大量的 tcp6 翻动来自这些检测。LAN 关闭 IPv6 后实际流量只有 v4，看日志时只需关注 tcp4 / udp4。
 
 全局页面中的“引导解析器”留空、“备用解析器”使用 `8.8.8.8:53`，是启动/故障回退设置，与 DNS 片段中的 DoH 上游和节点检测 DNS 不是同一个用途。脚本会生成 `daed-global-settings.txt` 作为 GUI 填写清单，但不会直接写入 `wing.db`。
 
