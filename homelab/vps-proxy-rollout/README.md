@@ -8,13 +8,33 @@
 
 这也带来三项运维取舍。**3x-ui 需要经 SSH 隧道访问。** 公网 IPv4 网站现在也经过 Xray，重启 Xray 可能让这些网站短暂中断，Web 后端默认看到的是回环来源地址。Hysteria 2 能应对部分 TCP 线路故障，同一台 VPS 或同一个公网 IP 出故障时则需要其他 VPS。
 
-从空白机开始可看[安装 3x-ui 并创建首个入站](DEPLOY.md#空白-vps-安装和准备)。已有网站和节点时，可从同一手册的[只读审查](DEPLOY.md#1-只读审查并记录基线)开始。
+从空白机开始，可以填写 [Agent 部署 Prompt](AGENT-PROMPT.md)，让 Agent 从 SSH 初始化做到两条节点的外网验收。手动部署可从[安装 3x-ui 并创建首个入站](DEPLOY.md#空白-vps-安装和准备)开始。已有网站和节点时，先做[只读审查](DEPLOY.md#1-只读审查并记录基线)。
 
 ## 访问 3x-ui
 
 ### 为什么要建立 SSH 隧道
 
 3x-ui 只监听 VPS 自己的 `127.0.0.1`，所以旧公网地址直接打开会失败。SSH 登录后，VPS 端的 SSH 服务可以连接本机面板。`ssh -L` 把这条连接转发到你电脑的一个本地端口。浏览器访问这个本地端口，SSH 把流量加密传到 VPS，再交给 3x-ui。
+
+### 为什么用专用浏览器窗口
+
+浏览器要同时知道两件事。**连到哪里**是你电脑上的 `127.0.0.1`，因为隧道入口在那里。**证书属于谁**仍是面板域名，例如 `panel.example.com`。直接在地址栏填 `https://127.0.0.1:28443/` 会让浏览器用 IP 核对证书，证书上的域名就对不上了。
+
+所以地址栏保留面板域名，启动浏览器时单独告诉它「这个域名连到本机，直接走隧道」。专用窗口用自己的数据目录，也就是这里说的浏览器 profile。这样 Edge 或 Chrome 会启动一份带这条规则的浏览器实例，日常窗口继续使用平时的 DNS 和代理。面板里仍用原账号登录。已经给这个域名配置了本地解析和代理直连时，日常窗口也能打开。 [浏览器数据目录说明](https://chromium.googlesource.com/chromium/src/+/HEAD/docs/user_data_dir.md)
+
+### Windows 上用引导脚本
+
+在仓库的 `homelab/vps-proxy-rollout` 目录下，从 WSL 终端运行下面的命令。脚本默认使用 `Ubuntu` 里的 SSH 别名，并优先打开 Windows 上的 Edge，找不到时再用 Chrome。使用其他 WSL 发行版时，在命令末尾加 `-Distro <发行版名>`。
+
+```sh
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w "$PWD/Open-3xUI.ps1")"
+```
+
+1. 第一次运行时，如果找到了旧 Edge 快捷方式的面板清单，按回车即可沿用。导入会跳过已经退役的 `nosla`。
+2. 输入面板编号，或按 `N` 添加面板。脚本会询问 WSL 里的 SSH 别名、原 HTTPS 登录地址和 VPS 上的面板管理端口。输入已有别名可更新该项。旧清单里没有 `lightlayer-zh`，可以用这个方式添加。
+3. 脚本会分配本地端口、建立隧道、验证 HTTPS 并打开专用窗口。用完后回到终端按回车关闭本次隧道。连接成功的配置保存在本机的 `%LOCALAPPDATA%\VPS-3xUI-Guide\panels.json`，下次选编号即可。
+
+旧桌面快捷方式调用 `%LOCALAPPDATA%\VPS-3xUI\Open-Panels.ps1`。这个 PowerShell 脚本读取同目录的 `panels.json`，用 WSL 的 `~/.local/bin/vps-3xui-tunnels` 批量启动 SSH 转发，再用同目录的 `BrowserProfile` 打开 Edge。新脚本沿用清单时会把它存到自己的目录。 [查看引导脚本](Open-3xUI.ps1)
 
 ### 换电脑后手动连接
 
@@ -25,9 +45,7 @@
    ssh -o ExitOnForwardFailure=yes -NT -L 127.0.0.1:28443:127.0.0.1:28443 lightlayer-zh
    ```
 
-3. 用 Chrome 打开面板。当前面板使用 HTTPS，地址需保留证书上的域名，再用本地端口和原登录路径访问，例如 `https://panel.example.com:28443/private-path/`。在本机让该域名解析到 `127.0.0.1`，浏览器才会走这条隧道，同时继续按原域名校验证书。打开登录页后使用原面板账号。 [Chrome 命令](DEPLOY.md#用-chrome-打开登录页) · [终端验收](DEPLOY.md#先用终端验证隧道和-https)
-
-SSH 隧道由终端里的 `ssh` 独立建立，打开浏览器前就可以用 `curl` 验证。手册示例使用单独的 Chrome 数据目录，只为了把临时域名映射限制在那个窗口，避免影响日常浏览器。已有合适的本地域名解析和代理直连规则时，直接用平时的 Chrome 打开面板即可。偶尔维护时手工运行这些命令就够了，桌面快捷方式可在确认能连接后再做。
+3. 用证书上的域名、本地转发端口和原登录路径打开面板，例如 `https://panel.example.com:28443/private-path/`。让浏览器把面板域名连到本机，并绕过代理。首次配置或排障时，可以先用 `curl` 验证。 [浏览器命令](DEPLOY.md#用浏览器打开登录页) · [终端验收](DEPLOY.md#先用终端验证隧道和-https)
 
 如果维护期间面板一起失联，先确认 SSH 连接是否还在。比如 SSH 流量经 `raksmart` 出口时，重启该机的 x-ui 可能断开多条隧道。维护前准备独立管理通路，服务恢复后重新运行转发命令。
 
@@ -66,7 +84,7 @@ curl --noproxy '*' --max-time 8 -fsS -o /dev/null -w '%{http_code}\n' \
   --resolve "${PANEL_HOST}:${LOCAL_PORT}:127.0.0.1" "${PANEL_SCHEME}://${PANEL_HOST}:${LOCAL_PORT}${PANEL_PATH}/"
 ```
 
-浏览器按 [Chrome 的域名映射方式](DEPLOY.md#用-chrome-打开登录页)打开，把示例域名换成 `panel-<主机别名>`，地址带本地端口。
+浏览器按[手动指定域名映射的方式](DEPLOY.md#用浏览器打开登录页)打开，把示例域名换成 `panel-<主机别名>`，地址带本地端口。
 
 ## 配置如何工作
 

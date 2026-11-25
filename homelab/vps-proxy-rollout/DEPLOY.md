@@ -21,6 +21,8 @@
 
 ### 空白 VPS 安装和准备
 
+如果由 Agent 执行，使用 [Agent 部署 Prompt](AGENT-PROMPT.md)，从首次 SSH 登录和 BBRv3 开始。
+
 1. 先确认 SSH 或供应商控制台可用。给节点域名做指向该 VPS 的直连 A 记录，准备节点域名和面板域名所需的可信 TLS 证书。节点域名可以复用于 Web 后端和 Hysteria 2，面板也可使用同一份覆盖该域名的证书。已有 ACME 流程可以复用。用 DNS-01 可避免占用 TCP 80，使用 HTTP-01 时先确认校验能到达现有 Web 服务或 ACME 监听。
 2. 在云防火墙或主机防火墙保持 SSH 可达，并限制面板管理端口的公网访问。选择与客户端兼容的 3x-ui 正式版。下面以现网用过的版本为例，先下载并审阅官方安装脚本，再执行。安装提示中选择未占用的管理端口，保存生成的账号和私有登录路径。已有证书时可选自定义证书路径。 [3x-ui 安装说明与发布包校验](https://github.com/MHSanaei/3x-ui/tree/v3.11.0)
 
@@ -73,34 +75,25 @@ curl.exe --noproxy '*' --max-time 8 -fsS -o NUL -w '%{http_code}\n' --resolve pa
 
 证书校验通过并收到预期登录页的状态码后，再打开浏览器。如果遇到证书域名不匹配，核对 URL 的域名与面板证书。出现 `404` 时检查登录路径。遇到连接拒绝或超时，先核对 SSH 会话、本地监听和 VPS 上的面板监听。
 
-### 用 Chrome 打开登录页
+### 用浏览器打开登录页
 
-Chrome 最终连接本机的转发端口，URL 仍使用证书域名。有本地域名映射时可以直接使用常用窗口，但系统级映射会影响其他应用和同域名下的其他端口。以下命令只给专用 Chrome 窗口设置域名映射与直连，日常 Chrome 可以继续使用原来的网络设置。浏览器的数据目录和 SSH 隧道的生命周期各自独立。
+日常访问 3x-ui 可以直接用 [Windows 引导脚本](README.md#windows-上用引导脚本)。手动连接时，地址栏保留证书域名，用 `--host-resolver-rules` 让浏览器把这个域名连到本机隧道，用 `--no-proxy-server` 让它直连。`--user-data-dir` 为这个窗口使用单独的数据目录，使这些启动参数只应用在专用浏览器实例上。 [为什么用专用浏览器窗口](README.md#为什么用专用浏览器窗口)
+
+下面是在 Windows PowerShell 里手动打开 Edge 的例子。按实际安装位置、证书域名、本地端口和登录路径替换示例值。使用 Chrome 时，把 `$browser` 改为 `chrome.exe` 的实际路径。
 
 ```powershell
-# 修改为证书上的域名、SSH 命令左侧的端口和原登录路径。
 $panelHost = 'panel.example.com'
 $localPort = 28443
 $panelPath = '/private-path/'
-$chrome = @(
-    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
-    "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
-    "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
-) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-if (-not $chrome) { throw 'Set $chrome to the path of chrome.exe.' }
-$dataDir = Join-Path $env:LOCALAPPDATA "VPS-3xUI-$panelHost"
-$chromeArgs = @(
-    "--user-data-dir=$dataDir"
-    "--host-resolver-rules=MAP $panelHost 127.0.0.1"
+$browser = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+$dataDir = Join-Path $env:LOCALAPPDATA "VPS-Panel-$panelHost"
+Start-Process -FilePath $browser -ArgumentList @(
+    "--user-data-dir=`"$dataDir`""
+    "--host-resolver-rules=`"MAP $panelHost 127.0.0.1`""
     '--no-proxy-server'
-    "https://${panelHost}:$localPort$panelPath"
+    "`"https://${panelHost}:$localPort$panelPath`""
 )
-& $chrome @chromeArgs
 ```
-
-### 可选的桌面快捷方式
-
-需要频繁管理时，可写个本地启动脚本，先建立或复用 SSH 转发，确认本地端口可连接，再用上面的参数启动 Chrome。桌面快捷方式调用该脚本即可。换电脑时按前两节手工连接。快捷方式、实际登录地址和 SSH 凭据保存在本机。
 
 ## 3. 暂存 TLS 后端和 Xray 配置
 
