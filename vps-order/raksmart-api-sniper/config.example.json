@@ -24,6 +24,7 @@
   "orderIntervalMs": 450,
   "orderTimeoutMs": 15000,
   "quoteTimeoutMs": 10000,
+  "checkoutQuoteMaxAttempts": 3,
   "parallel": 1,
 
   "clockOffsetMs": null

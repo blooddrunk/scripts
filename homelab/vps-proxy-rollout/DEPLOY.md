@@ -57,6 +57,7 @@ server {
 1. 确认原生 3x-ui 的管理端口、证书域名与登录路径。先从独立管理路径建立 SSH 转发，并实际打开登录页。 [SSH 转发命令与参数](README.md#换电脑后手动连接)
 2. 把 3x-ui 管理端口绑定到 `127.0.0.1`。1Panel 按反代需求绑定回环，或用原有防火墙限制原生管理端口的非回环访问。仅修改对应端口的 IPv4/IPv6 规则及其持久化配置，保留 SSH、Docker 和其他服务的规则。
 3. 从外部复测原生管理端口关闭。从 SSH 转发复测登录，并检查现有 1Panel HTTPS 反代和 HTTPS 订阅。重启 x-ui 后再验收一遍。SSH 若经正在维护的 VPS 出口转发，重启它可能断开该路径上的多个面板隧道。先换出口，恢复后再重建转发。
+4. 1Panel 面板开启二次验证并绑定面板域名。它的登录失败锁定只按 TCP 对端计数，放在反向代理后面时所有来源都是回环地址，任何人都能触发全局锁定；被锁时的访问方式见 [README](README.md#登录被锁时)。
 
 ### 先用终端验证隧道和 HTTPS
 
@@ -168,4 +169,4 @@ TCP SYN 到不了服务器时，比较日常网络和独立网络，并用服务
 
 `lightlayer-zh`（2026-11-23 上线）的备份与工具在 `/root/vps-proxy-rollout-20261123/`（适配版源码副本在仓库 `tools/rollout-lightlayer-zh.py`），`rollout.py` 由四台版本适配而来：域名固定为机器自带的节点域名、路由模板直接采用移除 `geosite:cn` 后的规则链、Xray 与先行各台统一为 26.11.9（`xray-new` 随目录预置）。`web`、`harden`、`cutover`、`publish` 与 `rollback-*` 语义不变。其 `cutover` 事务额外完成两项：把旧 Reality 入站置为 `exclude_from_sub`、把原 Hysteria 2 入站的备注改为 `lightlayer-zh-hysteria2`；`rollback-cutover` 会一并还原。旧 Reality 入站已于 2026-11-24 按第 6 节退役：同目录的 `retire.py`（由四台在用的版本适配）执行 `lightlayer-zh delete <时间戳>`，备份在 `retire-<旧端口>-<时间戳>/`，`retire.py lightlayer-zh rollback <时间戳>` 恢复退役前的数据库。面板管理端口已收口回环，订阅仍由原有的公网订阅端口提供，均使用同一泛域名证书。
 
-`lightlayer-zh` 上线同日加装 1Panel v2.5.1（对齐 raksmart/bitsflow）：无交互安装（面板端口、随机入口路径与凭据存于机内 `/root/1panel-credentials`，面板端口防火墙 REJECT 非回环并持久化）；OpenResty 应用经 `/etc/1panel/agent.sock` 的 `POST /api/v2/apps/install` 安装（params 必须带全量 env，缺 `WEBSITE_DIR` 或 `PANEL_APP_PORT_HTTPS` 会分别导致卷路径为空、默认站点 `listen 0` 崩溃循环）；此后回环 8443 回源、`.vps-proxy-origin` 证书版本目录与续签换链（WRAP → `rollout.py renew`）全部迁至 OpenResty，apt nginx 已 disable 保留作回退。面板另经公网 443 Reality 回落以 `panel.<节点域名>` 反代暴露（conf.d 手写站点 + `sites/…/proxy`，证书引用 `.vps-proxy-origin/current`）。带 1Panel 的三台面板地址同日统一为这一格式；raksmart 与 bitsflow 的迁移与回滚脚本在各自 `/root/panel-align-<主机别名>.sh`。1Panel 应用商店目录在 agent 启动时若 CDN 超时会挂起，`systemctl restart 1panel-agent` 可重触发同步。
+`lightlayer-zh` 上线同日加装 1Panel v2.5.1（对齐 raksmart/bitsflow）：无交互安装（面板端口、随机入口路径与凭据存于机内 `/root/1panel-credentials`，面板端口防火墙 REJECT 非回环并持久化）；OpenResty 应用经 `/etc/1panel/agent.sock` 的 `POST /api/v2/apps/install` 安装（params 必须带全量 env，缺 `WEBSITE_DIR` 或 `PANEL_APP_PORT_HTTPS` 会分别导致卷路径为空、默认站点 `listen 0` 崩溃循环）；此后回环 8443 回源、`.vps-proxy-origin` 证书版本目录与续签换链（WRAP → `rollout.py renew`）全部迁至 OpenResty，apt nginx 已 disable 保留作回退。面板另以 `panel-<主机别名>` 这类一级子域名经 CDN 代理暴露：站点为 1Panel 受管站点，使用面板签发的证书（2026-11-24 由开不了代理的两级子域名迁来，迁移前经 agent.sock 建了 Cloudflare DNS 账户）。三台的迁移与回滚脚本在各自 `/root/panel-rename-<主机别名>.sh`。1Panel 应用商店目录在 agent 启动时若 CDN 超时会挂起，`systemctl restart 1panel-agent` 可重触发同步。

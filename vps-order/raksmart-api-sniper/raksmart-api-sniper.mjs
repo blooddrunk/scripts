@@ -62,10 +62,11 @@ const DEFAULTS = {
 
   // 抢购节奏
   preflightQuoteIntervalMs: 5000,   // 等待期报价巡检间隔（顺带刷新结账用折扣 id）
-  skipPreflightQuote: false,        // true 等同命令行 --skip-quote：跳过报价预检，开抢直接下单
+  skipPreflightQuote: false,        // true 等同命令行 --skip-quote：跳过预检，开抢直接加购
   orderIntervalMs: 450,             // 场次内 add-order 重试间隔（库存不足时）
   orderTimeoutMs: 15000,            // 单次下单请求超时
   quoteTimeoutMs: 15000,
+  checkoutQuoteMaxAttempts: 3,     // 结账前补报价的总次数；0 表示临时故障时持续重试
   parallel: 1,                      // 场次内并行下单请求数（1-5）。多个成功只会结账第一个，其余停留在购物车不生成订单
 
   // 与服务器时间的手动偏移（毫秒，正数=本机慢）。默认自动用响应 Date 头校准。
@@ -107,9 +108,7 @@ function loadConfig() {
 
 const CONFIG = loadConfig();
 
-// 跳过首次报价预检（报价并非下单必需；开抢后直接打 add-order）。
-// 结账前若仍无折扣 id，会补一次报价尽力获取，拿不到则带空折扣结账。
-// 命令行 --skip-quote 或 config 的 skipPreflightQuote: true 均可开启。
+// 跳过加购前的报价请求。自动结账仍需确认报价和优惠券。
 const SKIP_QUOTE = SKIP_QUOTE_FLAG || Boolean(CONFIG.skipPreflightQuote);
 
 /* ================= 日志 ================= */
@@ -525,7 +524,7 @@ async function fetchTemplateUntil(http, deadlineTs) {
 
 function buildOrderParams(template) {
   const whmcs = template.product?.metadata?.whmcs ?? {};
-  const configOptions = { ...PAGE_DEFAULT_CONFIGOPTIONS };
+  const configOptions = { ...PAGE_DEFAULT_CONFIGOPTIONS, ...CONFIG.configOptions };
 
   // 模板里出现而默认表缺失的配置项（含隐藏项）：补第一个未隐藏选项，数量型补 "0"/"1"
   for (const co of whmcs.configoptions?.configoption ?? []) {
@@ -617,18 +616,39 @@ async function quote(http, params, timeoutMs) {
   });
 }
 
-function quoteVerdict(body) {
-  if (!body) return { ok: false, reason: '响应非 JSON' };
-  const price = Number(body.priceoverride ?? body.discounted_price ?? body.unit_price);
+function parsePrice(value) {
+  if (typeof value === 'number') return value;
+  return typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value.trim()) ? Number(value) : NaN;
+}
+
+function quoteVerdict({ status, body }) {
+  if (status !== 200) {
+    return { ok: false, reason: `报价接口 HTTP ${status}`, retryable: status === 408 || status === 429 || status >= 500 };
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, reason: '报价接口未返回有效的 JSON 对象', retryable: true };
+  }
+  const price = parsePrice(body.priceoverride ?? body.discounted_price ?? body.unit_price);
   const validate = body.activity_validate;
   if (validate && validate.status === false) {
     return { ok: false, reason: `活动校验失败：${validate.msg || '未开始/已结束'}`, price };
   }
-  if (!Number.isFinite(price)) return { ok: false, reason: '响应缺少价格字段' };
-  if (Math.abs(price - CONFIG.expectedPrice) > 0.001) {
-    return { ok: false, reason: `价格不符：$${price.toFixed(2)}（期望 $${CONFIG.expectedPrice.toFixed(2)}）`, price };
+  if (!Number.isFinite(price)) return { ok: false, reason: '响应缺少有效价格' };
+  const expectedPrice = parsePrice(CONFIG.expectedPrice);
+  if (!Number.isFinite(expectedPrice)) return { ok: false, reason: 'expectedPrice 无效', price };
+  if (price !== expectedPrice) {
+    return { ok: false, reason: `价格不符：$${price}（期望 $${expectedPrice}）`, price };
   }
-  return { ok: true, price, discountIds: body.use_discount_ids ?? [] };
+  const discountIds = body.use_discount_ids;
+  if (!Array.isArray(discountIds) || !discountIds.length || discountIds.some((id) => typeof id !== 'string' || !id.trim())) {
+    return { ok: false, reason: '报价未返回有效的优惠券 ID', price };
+  }
+  return { ok: true, price, discountIds };
+}
+
+function describeQuote(verdict) {
+  const detail = verdict.ok ? '✓ 匹配，已取得优惠券 ID' : verdict.reason;
+  return Number.isFinite(verdict.price) ? `$${verdict.price.toFixed(2)}｜${detail}` : detail;
 }
 
 async function placeOrder(http, params, customerId, timeoutMs) {
@@ -643,7 +663,7 @@ async function checkoutCart(http, cartId, customerId, discountIds) {
     payload: {
       cart_id: cartId,
       customer_id: customerId,
-      discount_ids: discountIds ?? [],
+      discount_ids: discountIds,
       consume_point: 0,
       notes: '',
       agree_terms: true,
@@ -695,6 +715,10 @@ function formatCountdown(ms) {
 
 async function run() {
   if (!CONFIG.email || !CONFIG.password) die('缺少账号：请在 config.json 或环境变量 RAKSMART_EMAIL / RAKSMART_PASSWORD 中配置');
+  const maxQuoteAttempts = CONFIG.checkoutQuoteMaxAttempts;
+  if (!Number.isSafeInteger(maxQuoteAttempts) || maxQuoteAttempts < 0) {
+    die('checkoutQuoteMaxAttempts 必须是非负整数（0 表示不限次数）');
+  }
 
   const schedule = resolveSchedule(Date.now());
   if (!ONCE && (!schedule.configured || !schedule.valid)) {
@@ -709,29 +733,25 @@ async function run() {
   const params = buildOrderParams(template);
   log(`✓ 商品模板：${template.product.title}（${params.productId}，${Object.keys(params.configOptions).length} 个配置项）`);
 
-  // 首次报价：仅预检提示 + 获取结账用折扣 id，失败不影响下单。
-  // --skip-quote 可整体跳过（开抢后直接打 add-order）。
-  let lastDiscountIds = [];
-  let quoteSucceeded = false; // 报价成功过：折扣 id 状态「已知」（可能合法为空）
+  // 报价预检失败不阻塞加购。有效报价可复用，避免结账前重复查询。
+  let checkoutQuote;
+  let receivedQuote = false;
   if (SKIP_QUOTE) {
-    log('--skip-quote：已跳过首次报价预检，开抢后直接下单');
+    log('--skip-quote：已跳过报价预检，开抢后直接加购');
   } else {
     try {
       const first = await quote(http, params);
-      const verdict = quoteVerdict(first.body);
-      log(`报价：$${(verdict.price ?? NaN).toFixed(2)}｜${verdict.ok ? '✓ 匹配' : verdict.reason}`);
-      lastDiscountIds = verdict.discountIds ?? [];
-      quoteSucceeded = first.status === 200 && Boolean(first.body);
-      if (!verdict.ok && !/价格不符/.test(verdict.reason)) {
-        log('⚠ 注意：当前活动校验未通过，仍将继续等待场次（到点后直接抢）');
-      }
+      checkoutQuote = quoteVerdict(first);
+      receivedQuote = first.status === 200 && Boolean(first.body);
+      log(`报价：${describeQuote(checkoutQuote)}`);
     } catch (error) {
-      log(`⚠ 首次报价失败（${error.message}），已跳过——不影响下单，结账前会再尝试补齐折扣 id`);
+      log(`⚠ 首次报价失败（${error.message}），加购成功后会补查报价`);
     }
   }
   if (ONCE) {
-    if (quoteSucceeded) log('--once 模式：校验完成，退出（未提交订单）');
-    else die('--once 在跳过报价模式下无内容可校验，直接正常开跑即可');
+    if (SKIP_QUOTE) die('--once 需要启用报价预检');
+    if (!receivedQuote) die('--once 未取得报价响应');
+    log('--once 模式：校验完成，退出（未提交订单）');
     return;
   }
 
@@ -751,12 +771,11 @@ async function run() {
         lastQuotePollAt = Date.now();
         try {
           const check = await quote(http, params);
-          if (check.status === 200 && check.body) {
-            quoteSucceeded = true;
-            const v = quoteVerdict(check.body);
-            if (v.discountIds) lastDiscountIds = v.discountIds;
+          if (check.status === 200) {
+            // 新报价显式失效时废弃旧优惠，等加购成功后重新确认。
+            checkoutQuote = quoteVerdict(check);
             process.stdout.write(`\r${' '.repeat(40)}\r`);
-            log(`巡检报价：$${(v.price ?? NaN).toFixed(2)}｜${v.ok ? '✓ 匹配' : v.reason}`);
+            log(`巡检报价：${describeQuote(checkoutQuote)}`);
           }
         } catch (error) { /* 等待期报价失败无需理会 */ }
       }
@@ -790,8 +809,7 @@ async function run() {
       log('--dry-run：不提交订单，窗口内仅持续校验报价');
       while (now(clockOffset) < windowEnd) {
         const check = await withRetries('报价', () => quote(http, params), 2, 2000);
-        const v = quoteVerdict(check.body);
-        log(`报价：$${(v.price ?? NaN).toFixed(2)}｜${v.ok ? '✓ 匹配' : v.reason}`);
+        log(`报价：${describeQuote(quoteVerdict(check))}`);
         await sleep(CONFIG.preflightQuoteIntervalMs);
       }
       return;
@@ -862,35 +880,31 @@ async function run() {
   }
 
   const cartId = success.cart.id;
-  log('立即结账…');
   writeState({ key, done: 'cart', cartId, doneAt: new Date().toISOString() });
 
-  // 结账必须携带活动折扣 id，否则账单按「原价」生成（实测踩坑）。
-  // 只有报价成功过（折扣状态已知，可能合法为空）才允许直接结账；
-  // 从未拿到报价时先补采，补不到就保留购物车交人工，绝不盲目按原价结账。
-  if (!quoteSucceeded) {
-    for (let attempt = 1; attempt <= 3 && !quoteSucceeded; attempt += 1) {
-      try {
-        const backfill = await quote(http, params, Math.min(8000, CONFIG.quoteTimeoutMs));
-        if (backfill.status === 200 && backfill.body) {
-          quoteSucceeded = true;
-          lastDiscountIds = quoteVerdict(backfill.body).discountIds ?? lastDiscountIds;
-        }
-      } catch (error) { /* 继续补采 */ }
-      if (!quoteSucceeded) await sleep(3000);
+  // 只重试临时故障。0 不设次数上限，明确的拒绝仍会保留购物车。
+  for (let attempt = 1; !checkoutQuote?.ok; attempt += 1) {
+    try {
+      const backfill = await quote(http, params, Math.min(8000, CONFIG.quoteTimeoutMs));
+      checkoutQuote = quoteVerdict(backfill);
+    } catch (error) {
+      checkoutQuote = { ok: false, reason: `报价请求失败：${error.message}`, retryable: true };
     }
+    if (!checkoutQuote.retryable || attempt === maxQuoteAttempts) break;
+    log(`结账前报价第 ${attempt} 次失败（${checkoutQuote.reason}），3 秒后重试`);
+    await sleep(3000);
   }
-  if (!quoteSucceeded) {
-    log('⚠ 多次报价均失败，拿不到活动折扣 id——已保留购物车，不盲目按原价结账');
-    log(`请尽快打开购物车人工完成结账（页面会自动应用活动折扣）：${BILLING_ORIGIN}/ec/cart?lang=cn`);
-    writeState({ key, done: 'cart', cartId, reason: 'no-quote-for-discounts', doneAt: new Date().toISOString() });
+  if (!checkoutQuote.ok) {
+    log(`⚠ 已保留购物车（${cartId}），未自动结账。原因：${checkoutQuote.reason}`);
+    log(`请打开购物车核对价格和优惠券：${BILLING_ORIGIN}/ec/cart?lang=cn`);
+    writeState({
+      key, done: 'cart', cartId, reason: 'checkout-quote-unverified',
+      quoteError: checkoutQuote.reason, doneAt: new Date().toISOString(),
+    });
     return;
   }
-  if (lastDiscountIds.length) {
-    log(`结账折扣 id：${lastDiscountIds.join(', ')}`);
-  } else {
-    log('报价显示该活动无附加折扣 id，按报价价格结账');
-  }
+  const { discountIds } = checkoutQuote;
+  log(`立即结账（报价 $${checkoutQuote.price.toFixed(2)}，优惠券 ID：${discountIds.join(', ')}）`);
 
   // 结账请求超时 ≠ 失败：服务端可能已受理并在处理（实测：超时请求最终成功建单）。
   // 「is processing」也说明首次请求在途。因此超时/处理中/5xx 都轮询重试，业务性错误才停止。
@@ -899,7 +913,7 @@ async function run() {
   for (let attempt = 1; attempt <= 8 && !checkout; attempt += 1) {
     let result;
     try {
-      result = await checkoutCart(http, cartId, customer.id, lastDiscountIds);
+      result = await checkoutCart(http, cartId, customer.id, discountIds);
     } catch (error) {
       result = { status: 0, body: null, error: error.message };
     }
@@ -937,7 +951,7 @@ async function run() {
     log('付款前请核对账单金额与活动价一致');
     writeState({
       key, done: true, cartId, orderId, invoiceId, invoiceUrl: url,
-      discountIds: lastDiscountIds,
+      discountIds,
       doneAt: new Date().toISOString(),
     });
   } else {

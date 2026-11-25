@@ -12,29 +12,42 @@ Medusa 后端完成「登录 → 报价校验 → 下单 → 结账」全链路�
 
 ## 快速开始
 
+### 一键启动自动下单
+
+首次使用时，在脚本目录把 `config.example.json` 复制为 `config.json`，填写商品、预期价格和场次。
+
+如果已在 `config.json` 填写 `email` 和 `password`，从仓库根目录启动。
+
 ```bash
-cp config.example.json config.json   # 按需修改场次等字段
-export RAKSMART_EMAIL="you@example.com"
-export RAKSMART_PASSWORD="你的密码"
-
-# ① 校验模式：登录 + 模板 + 报价检查，不提交订单
-node raksmart-api-sniper.mjs --once
-
-# ② 实战：等待场次到点自动开抢
-node raksmart-api-sniper.mjs --config ./config.json
-
-# 可选参数
-#   --dry-run     完整流程但绝不提交订单
-#   --force       忽略本地“本场已下单”状态
-#   --skip-quote  跳过报价预检，开抢后直接打下单接口（详见下文）
-#   --once        只做登录 + 模板 + 报价校验后退出（验证配置，不提交订单）
+cd vps-order/raksmart-api-sniper && node raksmart-api-sniper.mjs
 ```
 
-成功后输出订单号、账单号与付款页 URL；本地 `.raksmart-sniper-state.json`
-记录本场结果，防止重复运行重复下单。
+也可以在启动时传入账号环境变量。先替换示例邮箱和密码，再从仓库根目录运行。环境变量优先于 `config.json` 中的账号字段。
 
-**请提前启动**：预热（登录 + 校时 + 模板 + 首次报价）实测几秒到一分钟
-不等（接口波动时更久），建议开抢前 10 分钟以上启动脚本。
+```bash
+cd vps-order/raksmart-api-sniper && \
+  RAKSMART_EMAIL='you@example.com' RAKSMART_PASSWORD='your-password' \
+  node raksmart-api-sniper.mjs
+```
+
+**这会自动加购，并在确认活动价和优惠券后自动结账。** 脚本先登录和预热，进入配置的场次后尝试加购。库存不足时会在场次内重试。结账成功后输出订单、账单和付款信息，付款由你手动完成。本地 `.raksmart-sniper-state.json` 记录场次结果，避免重复下单。
+
+建议提前至少 10 分钟启动，给登录、校时、读取商品模板和首次报价留出时间。
+
+### 默认配置和 `--config`
+
+在脚本目录运行时，`node raksmart-api-sniper.mjs` 和 `node raksmart-api-sniper.mjs --config ./config.json` 等效，两条命令都读取当前工作目录的 `config.json`。要用另一份配置时，传入它的路径，例如 `--config ./another-sale.json`。相对路径以运行命令时所在的目录为准。
+
+### 只测试报价
+
+以下命令在脚本目录运行。两种模式都不会加购或结账。
+
+| 命令 | 行为 |
+|---|---|
+| `node raksmart-api-sniper.mjs --once` | 启动后立即登录、读取商品模板并检查一次报价，然后退出。无需配置场次，适合核对活动价。使用时启用报价预检（`skipPreflightQuote: false`），并省略 `--skip-quote`。 |
+| `node raksmart-api-sniper.mjs --dry-run` | 按配置的场次运行。进入场次后定期检查报价，场次结束后退出。需要有效的场次配置，适合测试定时和轮询。 |
+
+`--force` 可跳过本地的场次去重记录。`--skip-quote` 可让脚本开抢时直接加购，详情见下文。
 
 ## 哪些步骤是下单必须的？
 
@@ -43,22 +56,20 @@ node raksmart-api-sniper.mjs --config ./config.json
 | 登录（4 跳 OAuth） | ✅ 必须 | 网络类错误**指数退避持续重试直到场次结束**；账密错误立即终止 |
 | 商品模板 `products/template/whmcs/<pid>` | ✅ 必须（下单 body 的 product_id/group_id/配置项来自它） | **持续重试直到场次结束**，场次结束仍失败才终止 |
 | 时钟校准 | ❌ 非必须 | 从登录链路/模板响应的 `Date` 头**顺带采样**（零额外请求）；采不到就按偏移 0 继续，只影响开抢卡点精度 |
-| 首次报价 `get-product-price` | ❌ 非必须 | 仅预检提示 + 获取结账用折扣 id；失败自动跳过，不阻塞下单 |
-| 等待期报价巡检 | ❌ 非必须 | 尽力刷新折扣 id，失败静默；开抢前最后 60 秒停发一切请求保卡点 |
-| add-order / checkout-cart | ✅ 核心 | add-order 库存不足按 `orderIntervalMs` 重试；结账超时/`is processing` 轮询确认（服务端可能仍在处理）；始终无法确认则提示人工核对，绝不自动重跑 |
+| 首次报价 `get-product-price` | ❌ 加购前可跳过 | 校验预期价格和优惠券。预检失败仍可加购 |
+| 等待期报价巡检 | ❌ 非必须 | 尽力刷新报价和优惠券。最后 60 秒停止发起巡检 |
+| `add-order` 加购 | ✅ 必须 | 库存不足时按 `orderIntervalMs` 重试 |
+| `checkout-cart` 自动结账 | ✅ 生成订单和账单 | 需要通过价格和优惠券校验的报价。结账超时或仍在处理时，会轮询确认结果 |
 
 ### `--skip-quote` / `skipPreflightQuote: true`
 
-确定要抢时可用：跳过首次报价预检，进入窗口后**直接**开始提交
-`add-order`，报价接口一个都不调。适合接口高峰期报价慢、或你已经人工
-确认过活动价格的场景。
+在配置中设 `skipPreflightQuote: true`，或在启动命令末尾加 `--skip-quote`，即可跳过首次报价和等待期巡检。到点后直接加购。加购一直失败时，整场都不会查询报价。
 
-**结账的折扣保护**（实测踩坑）：该站活动价靠 `discount_ids`（报价接口
-返回的 `use_discount_ids`）在结账时应用——空折扣结账会生成**原价**
-订单（实测 $174.90 而非 $49.90）。因此结账前若从未成功拿到报价，脚本
-会补采报价；补不到就**保留购物车拒绝盲目结账**，提示打开
-`/ec/cart` 人工结账（页面自动带活动折扣）。报价成功且明确无折扣的
-活动才会按空折扣结账。
+加购成功后，若没有通过校验的预检报价，脚本才会查价。**报价必须等于 `expectedPrice`，并返回有效的 `use_discount_ids`，才会自动结账。** 正常只查一次。遇到超时、429、5xx 等临时故障时，失败后等 3 秒再试，直到取得有效报价或达到 `checkoutQuoteMaxAttempts`。该配置默认是 `3`，含首次补报价。填 `0` 可不限次数地重试临时故障。补报价可以持续到加购场次结束后，按 `Ctrl+C` 可停止。
+
+价格不符、缺少优惠券 ID、活动无效或达到重试上限时，脚本会保留购物车，显示原因和购物车链接。
+
+启用预检时可以复用已通过校验的报价，省掉加购后的查询。后续巡检若返回无效报价，旧报价会作废。当前结账请求没有价格上限字段，因此即使跳过预检，自动结账仍需要至少一次通过校验的报价。付款前请核对最终账单金额。
 
 **结账超时的处理**（实测踩坑）：结账请求客户端超时 ≠ 失败——服务端
 可能已受理并最终建单（实测超时请求在 ~35s 后成功生成订单，期间重试
@@ -155,7 +166,7 @@ POST /store/products/template/whmcs/<pid>     body: { sample_id, activity_id }
 Zone/Region/IP Type 等），缺一个即 400 `configoption_value_invalid`。
 报价请求只需可见项，两者不一致——脚本已处理。
 
-### 4. 下单
+### 4. 加购
 
 ```
 POST /store/custom/cart/add-order             （需登录，401 表示会话失效）
@@ -182,7 +193,7 @@ POST /store/custom/cart/add-order             （需登录，401 表示会话失
 
 响应：
 
-- `200` → `body.cart.id`（下单成功，拿到购物车 id）
+- `200` → `body.cart.id`（加购成功，拿到购物车 ID）
 - `400` `{"code":"activity_error","message":"Activity error msg:库存不足"}` → 没抢到，重试
 - `400` `configoption_value_invalid` → 参数缺项，检查 configoptions_data
 - `401` → 会话失效，重新走登录链路

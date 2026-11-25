@@ -45,6 +45,11 @@ tailnet 远程测不到 br-lan 拦截面，需要手边设备确认：
    - 访问一个国内站（baidu.com）→ 正常直连速度。
 3. **doona 面板直达**：浏览器开 `http://192.168.100.1:9527/ui/`
    （password_auth，凭据在 `/root/honk-migration-20261120/panel-credentials.txt`）。
+4. **IPv6 不绕过代理**（2026-11-24 审查补充，tailnet 侧测不到 br-lan 的 v6 路径）：
+   找一台有全局 IPv6 地址的 LAN 设备，关闭其自带代理，浏览器访问
+   `https://ipv6.icanhazip.com` 或 `https://test-ipv6.com` 的出口 IP 页 →
+   应显示节点的 IPv6 出口，或干脆打不开（节点是 IPv4-only，fail-closed）；
+   **绝不应显示家宽的 2409: 开头地址**。
 
 ## 三、已知无需处理的现象
 

@@ -1,0 +1,39 @@
+# quota-switch.sh 的配置 — router-home /root/honk-quota/config.sh
+# 复制为 config.sh 并替换占位。权限保持 0600（里面有 clash secret）。真实值不进仓库。
+# 仓库里的脱敏副本：homelab/openwrt-honk/quota/config.sh.example
+
+KOMARI_BASE="https://monitor.example.top"
+
+# AI 首选机：premium 组默认走它；月流量不足时改走 GROUP_ZH_FALLBACK
+NODE_NAME_ZH="Lightlayer-zh"     # komari 里的节点名（/api/nodes 的 name）
+UUID_ZH="<komari uuid>"          # /api/nodes 里该节点的 uuid
+GROUP_ZH="lightlayer-zh"         # premium 里它的成员名（= config.dae 里这台 VPS 的组名）
+GROUP_ZH_FALLBACK="us"
+
+# 只告警、不动作的两台日常机
+NODE_NAME_RAKSMART="Raksmart"
+UUID_RAKSMART="<komari uuid>"
+NODE_NAME_BITSFLOW="Bitsflow"
+UUID_BITSFLOW="<komari uuid>"
+
+# 滞回阈值（剩余率百分比）：>= T_HIGH 用 lightlayer-zh；< T_LOW 改走 us；区间内维持现状
+T_HIGH=20
+T_LOW=10
+# 日常机剩余率告警线
+WARN_PCT=10
+
+# 首周期补偿（字节 / 到期时刻的 epoch 秒）：komari agent 是月中才开始计数的，本周期此前的
+# 用量不计入，手动补上；到首次重置的时刻自动失效，之后不再需要。
+#   lightlayer-zh：agent 2026-11-24 启用，重置日每月 18 日；此前的用量按 3x-ui 计数估算
+#   raksmart：agent 的流量序列 2026-11-19 才开始，重置日每月 16 日（上一版脚本留下的补偿）
+OFFSET_ZH=174237670162
+OFFSET_EXPIRE_ZH=1797552000         # 2026-12-18T00:00:00Z
+OFFSET_RAKSMART=38654705664
+OFFSET_EXPIRE_RAKSMART=1797379200   # 2026-12-16T00:00:00Z
+# bitsflow 的 agent 序列从一开始就是完整的，不补偿
+OFFSET_BITSFLOW=0
+OFFSET_EXPIRE_BITSFLOW=0
+
+# clash API（本机）
+CLASH_API="http://127.0.0.1:9090"
+CLASH_SECRET="CHANGE_ME"

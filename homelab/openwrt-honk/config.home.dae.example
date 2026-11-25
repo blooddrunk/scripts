@@ -1,29 +1,39 @@
 # ============================================================
-# router-home 的 honk 配置（脱敏模板，与 2026-11-20 实际部署一致）
+# router-home 的 honk 配置（脱敏模板）— 候选版 2026-11-25，尚未部署
+# 线上仍是 2026-11-20 版。大白话的架构说明见同目录 README.md「配置架构」
 #
-# 用法: 复制到路由器 /etc/honk/config.dae 并替换占位符：
+# 这是唯一来源，不要直接编辑：改完本文件后运行
+#   python3 tools/honk_subs.py --candidate /tmp/config.dae
+# 它代入路由器上的真实值生成完整配置（0600）并审计。带密钥的文件不进仓库。
+#
+# 占位符：
 #   - 203.0.113.10  -> raksmart 公网 IP
 #   - 203.0.113.20  -> lightlayer 公网 IP
+#   - 203.0.113.40  -> lightlayer-zh 公网 IP
 #   - 203.0.113.30  -> bitsflow 公网 IP
 #   - example.top   -> 自建域名后缀
-#   - 订阅 URL       -> Sub-Store 每 VPS 单订阅真实链接（含 token）
-#   - clash_api secret -> 随机密钥（勿留空：默认 0.0.0.0 无鉴权暴露）
+#   - TOKEN         -> Sub-Store 路径 token
+#   - CHANGE_ME_RANDOM -> clash API 随机密钥（勿留空：默认 0.0.0.0 无鉴权暴露）
+#   - honk:local-direct-begin/end 之间的一行由 control.sh 在服务启动时重渲染
+# 节点段每个块的首行写成「# <订阅名> <占位 IP>」，--candidate 据此按订阅实际内容代入真实 IP。
 #
-# 设计说明与裁剪决策见同目录 README.md。实装踩坑记录（勿再踩）：
-#   1. name('正则') 是全匹配语义；子串过滤必须用 name(keyword: '...')；
-#      池身份一律用 subtag(<订阅tag>)，勿依赖节点名
+# 实装踩坑记录（勿再踩）：
+#   1. 池身份一律用 subtag(<订阅tag>)，勿依赖节点名；name('正则') 是全匹配语义
 #   2. 订阅必须 route: direct，否则冷启动无节点时订阅下载死锁
-#   3. clash_api secret 修改后热 reload 不生效，需 lifecycle restart
-#   4. honk:local-direct-begin/end 标记块由 control.sh 按本机地址重写，保留
-#   5. config validate 不检查 filter 表达式（写错函数名照样绿灯，运行时静默
-#      忽略导致组空）；改 filter 后必看 logread 有无 parse 告警
-#   6. group(...) 必须独占整个 filter 行；honk-core proxy 子命令不能选嵌套组
-#      成员，脚本切 selector 用 clash API PUT /proxies/<组>
+#   3. 改配置用 `honk-core reload`（热重载）；`/etc/init.d/honk reload` 实为 restart，会断连接
+#   4. clash_api secret / native_api listen 改动热 reload 不生效，需 lifecycle restart
+#   5. `honk-core config validate` 查不出 subtag(...) / group(...) 的引用错误（实测两种都
+#      通过）：subtag 写错 = 运行时静默空过滤；group 写错 = 热重载被拒（旧配置继续生效），
+#      但拿它直接 restart 会让核心起不来。改完一律先 `honk-core reload`，通过后再谈 restart
+#   6. 组里一条 filter 都不剩 = 接收全部节点；删订阅时别把某组最后一行 filter 删掉
+#   7. group(...) 必须独占整个 filter 行；切 selector 用 clash API PUT /proxies/<组>
+#   8. 兜底别用 fallback 策略：它一旦顺延就粘在备胎上，首选恢复了也不切回。
+#      用「selector 默认首选 + 各组 final 逐级兜底」，首选恢复后自动切回
 # ============================================================
 
 global {
     wan_interface: auto
-    lan_interface: br-lan
+    lan_interface: 'br-lan'
     log_level: info
     dial_mode: domain
     allow_insecure: false
@@ -38,8 +48,10 @@ global {
     udp_check_dns: '223.5.5.5:53'
     check_interval: 60s
     check_tolerance: 50ms
-    # DNS 上游写域名时用它自举；写死 IP 时不会用到。
-    bootstrap_resolver: '1.1.1.1:53'
+    # 自举解析器：节点入口域名（hy2 节点的 server 是域名）、route: direct 的订阅下载
+    # 都走它，不经 honk 的 DNS 路由，所以 DNS 上游写死 IP 也照样用到。用国内解析器，
+    # 免得这些查询明文跨境；留空或查询失败时回落 /etc/hosts 与系统 nameserver。
+    bootstrap_resolver: '223.5.5.5:53'
     store_subscribe: true
     nfqueue_enable: true
 }
@@ -71,14 +83,20 @@ experimental {
 }
 
 subscription {
-    # Sub-Store 统一入口的每 VPS 单订阅导出；订阅 tag 即池身份（subtag 过滤，
-    # 节点改名/随机后缀不影响分组）。nosla 不订阅自动绝迹
+    # Sub-Store 统一入口的每 VPS 单订阅导出；订阅 tag 即 VPS 身份（见 group 的 subtag 过滤）。
+    # 各订阅相互独立：某条拉取失败 / 404 / 解析失败时，honk 保留该订阅上一次的有效节点
+    # （日志 "Subscription refresh failed; keeping active nodes"），其余订阅不受影响；
+    # 冷启动先从 state/honk.db 恢复各订阅正文，再后台刷新。
+    # 直连拉取：冷启动无可用节点时订阅经 proxy 组会死锁。
+    # substore 域名是 Cloudflare 橙云（解析到 104.21.x / 172.67.x），家宽直连偶发
+    # download_timeout 属正常，失败后 30s 起指数退避重试（上限 min(10min, interval)）。
     raksmart: 'https://substore.example.top/TOKEN/download/raksmart' {
-        # 直连拉取：冷启动无可用节点时订阅经 proxy 组会死锁；
-        # substore 灰云直连家宽可达（2026-11-20 实测 200/0.44s）
         route: direct
     }
     lightlayer: 'https://substore.example.top/TOKEN/download/lightlayer' {
+        route: direct
+    }
+    lightlayer-zh: 'https://substore.example.top/TOKEN/download/lightlayer-zh' {
         route: direct
     }
     bitsflow: 'https://substore.example.top/TOKEN/download/bitsflow' {
@@ -87,44 +105,63 @@ subscription {
 }
 
 group {
-    # us：美国优化线池（raksmart+lightlayer），premium 的默认承载
+    # ============ 每台 VPS 一个组 ============
+    # 组内是该 VPS 的两个节点（Reality / Hy2），自动用延迟低的那个活着的。
+    # final = 这一整台都不通时改用哪个组（逐级往下兜底）。
+    # 一台 VPS 一行 filter；删 VPS 时同步删（删到一行 filter 都不剩，本组会变成"全部节点"）。
+
+    # lightlayer-zh：AI 首选。整台不通 → us
+    lightlayer-zh {
+        filter: subtag(lightlayer-zh)
+        policy: min_moving_avg
+        tolerance: 50
+        final: us
+    }
+    # us：raksmart（暂时还有待退役的 lightlayer）。整台不通 → jp
     us {
         filter: subtag(raksmart)
         filter: subtag(lightlayer)
         policy: min_moving_avg
         tolerance: 50
+        final: jp
     }
-    # jp：日本低延迟线池（bitsflow），配额不足时的备选
+    # jp：bitsflow
     jp {
         filter: subtag(bitsflow)
         policy: min_moving_avg
         tolerance: 50
     }
-    # 日常代理：score 先行（不稳回退 min_moving_avg 只需改这一行）
-    # 注意：group(...) 必须独占整个 filter 行；多行 filter 之间是 OR
+
+    # ============ 按用途选 VPS 的三个组 ============
+    # 日常流量：raksmart 与 bitsflow 之间按实际体验自动选（score）。lightlayer-zh 不参与。
     proxy {
         filter: group(us)
         filter: group(jp)
         policy: score
     }
-    # AI/质量敏感：selector，quota-switch.sh 按 komari 月度配额切 us|jp；
-    # 切换用 clash API PUT（honk-core proxy 子命令不接受嵌套组成员）
+    # AI 流量：首选 lightlayer-zh；它整台不通时依次顺延到 raksmart、bitsflow；
+    # 恢复后自动切回。可在面板里手动选，或由 quota-switch.sh 按流量配额切到 us。
+    # us、jp 既是备选成员，也保证这个组在 lightlayer-zh 挂掉时不会被整体判为不可用。
     premium {
+        filter: group(lightlayer-zh)
         filter: group(us)
         filter: group(jp)
         policy: fixed
-        default: us
+        default: lightlayer-zh
     }
-    # fallback DoH 承载：跨 VPS（us+jp 全池）+ 协议多样（reality+hysteria2）
+    # 国外域名解析（DoH）的通道：raksmart / bitsflow 里延迟低的那个；
+    # 两台都不通才用 lightlayer-zh（DNS 流量极小，不影响它的配额）。
     doh {
         filter: group(us)
         filter: group(jp)
         policy: min_moving_avg
+        final: lightlayer-zh
     }
 }
 
 dns {
-    # 直连查询带上客户端网段，国内 CDN 才会返回就近地址
+    # ECS：auto 探测首个公网网关跳，用它的 /24 作为客户端网段附给直连上游（家宽是
+    # CGNAT，拿不到真实客户端公网段）。对国内 CDN 就近帮助有限，保留无害
     client_subnet: auto
     ipversion_prefer: 4
     use_host: true
@@ -159,6 +196,8 @@ routing {
     pname(qbittorrent) -> direct(must)
     dscp(4) -> direct(must)
     # dnsmasq 用 127.0.0.1 源地址查上游，private 规则兜不住，单独放行。
+    # 副作用：路由器自身经 127.0.0.1 的解析走运营商明文 DNS（国外域名被污染），
+    # LAN 客户端不受影响（53 端口在 br-lan 入口被 honk 接管）。
     pname(dnsmasq) && l4proto(udp) && dport(53) -> direct(must)
 
     # ---- tailnet 保命（运维 SSH 就走这条路径，宁多勿少）----
@@ -180,39 +219,64 @@ routing {
     # （公司侧 2026-11-20 停机演练教训）。full 精确匹配控制域名，
     # 避免误伤 substore 等其它自建子域
     domain(suffix: tailscale.com) -> direct
-    domain(full: hs.haoqi90.top) -> direct
+    domain(full: hs.example.top) -> direct
 
-    # ---- 自建节点入口精确直连（只匹配 IP+协议+端口，勿整台 VPS /32）----
-    # 203.0.113.10 = raksmart、203.0.113.20 = lightlayer、203.0.113.30 = bitsflow
+    # ---- 自建节点入口直连（只匹配 IP+协议+端口，勿整台 VPS /32）----
+    # 作用：LAN 里自带代理客户端的设备直连节点时，不再被 honk 套一层代理（套娃/回环）。
+    # honk 自己拨节点走旁路 mark，不依赖这些规则。
+    # 每台 VPS 一个 5 行块：hy2 固定口 dip/sip、跳跃段 48000-50000 dip/sip、Reality TCP 443。
+    # 增删 VPS = 整块增删；块首行必须是「# <订阅名> <占位 IP>」，见文件头。
+    # --candidate 会对照订阅实际内容审计这一段：漏规则、端口不对都会报出来。
+    # 443 整口直连：既是 Reality 入口，也让访问同机面板/服务不绕代理（免经节点回连自身）。
+    # honk:nodes-begin
+    # raksmart 203.0.113.10（hy2 固定口 51197）
     dip(203.0.113.10/32) && l4proto(udp) && dport(51197) -> direct(must)
-    dip(203.0.113.20/32) && l4proto(udp) && dport(36143) -> direct(must)
-    dip(203.0.113.30/32) && l4proto(udp) && dport(47625) -> direct(must)
-    # hy2 固定口回程
     sip(203.0.113.10/32) && l4proto(udp) && sport(51197) -> direct(must)
+    dip(203.0.113.10/32) && l4proto(udp) && dport(48000-50000) -> direct(must)
+    sip(203.0.113.10/32) && l4proto(udp) && sport(48000-50000) -> direct(must)
+    dip(203.0.113.10/32) && l4proto(tcp) && dport(443) -> direct(must)
+
+    # lightlayer 203.0.113.20（hy2 固定口 36143）
+    dip(203.0.113.20/32) && l4proto(udp) && dport(36143) -> direct(must)
     sip(203.0.113.20/32) && l4proto(udp) && sport(36143) -> direct(must)
+    dip(203.0.113.20/32) && l4proto(udp) && dport(48000-50000) -> direct(must)
+    sip(203.0.113.20/32) && l4proto(udp) && sport(48000-50000) -> direct(must)
+    dip(203.0.113.20/32) && l4proto(tcp) && dport(443) -> direct(must)
+
+    # lightlayer-zh 203.0.113.40（hy2 固定口 15672）
+    dip(203.0.113.40/32) && l4proto(udp) && dport(15672) -> direct(must)
+    sip(203.0.113.40/32) && l4proto(udp) && sport(15672) -> direct(must)
+    dip(203.0.113.40/32) && l4proto(udp) && dport(48000-50000) -> direct(must)
+    sip(203.0.113.40/32) && l4proto(udp) && sport(48000-50000) -> direct(must)
+    dip(203.0.113.40/32) && l4proto(tcp) && dport(443) -> direct(must)
+
+    # bitsflow 203.0.113.30（hy2 固定口 47625）
+    dip(203.0.113.30/32) && l4proto(udp) && dport(47625) -> direct(must)
     sip(203.0.113.30/32) && l4proto(udp) && sport(47625) -> direct(must)
-    # hy2 端口跳跃段（双向放行，漏掉会落入 fallback: proxy 形成代理回环）
-    dip(203.0.113.10/32, 203.0.113.20/32, 203.0.113.30/32) && l4proto(udp) && dport(48000-50000) -> direct(must)
-    sip(203.0.113.10/32, 203.0.113.20/32, 203.0.113.30/32) && l4proto(udp) && sport(48000-50000) -> direct(must)
+    dip(203.0.113.30/32) && l4proto(udp) && dport(48000-50000) -> direct(must)
+    sip(203.0.113.30/32) && l4proto(udp) && sport(48000-50000) -> direct(must)
+    dip(203.0.113.30/32) && l4proto(tcp) && dport(443) -> direct(must)
+    # honk:nodes-end
 
     # ---- cloudflared tunnel（路由器本机容器，必须直连）----
     domain(suffix: argotunnel.com, suffix: cftunnel.com, suffix: cloudflareaccess.com) -> direct(must)
     dip(198.41.192.0/24, 198.41.200.0/24) && l4proto(tcp) && dport(7844) -> direct(must)
     dip(198.41.192.0/24, 198.41.200.0/24) && l4proto(udp) && dport(7844) -> direct(must)
 
-    # ---- Google / Gemini 显式代理（先于 CN 直连）----
-    domain(geosite:google-deepmind, geosite:google) -> proxy
+    # ---- AI 服务：走 premium（lightlayer-zh 首选，挂了顺延）----
+    # 必须排在下面的 Google 规则前面：Gemini 的域名全在 geosite:google 里，放在后面会先被
+    # Google 规则接走。这几个分类与 geosite:cn 没有重叠。扩展 AI 清单时用分类、别用全量
+    # category-ai-!cn（它混着 HuggingFace、Cursor 更新等下载类域名，会消耗 lightlayer-zh 的流量）。
+    domain(geosite:openai, geosite:anthropic, geosite:google-gemini, geosite:xai, geosite:perplexity) -> premium
+
+    # ---- Google 系显式代理（先于 CN 直连）----
+    domain(geosite:google) -> proxy
 
     # ---- fallback DoH 上游钉到 doh 组 ----
     # dip 打底：IP 形式拨号无 SNI，domain 规则匹配不到；104.16.248-249.x 为
     # cloudflare-dns.com 固定 A 记录兜底；domain 覆盖 A 记录漂移与浏览器自带 DoH
     dip(1.1.1.1/32, 1.0.0.1/32, 104.16.248.249/32, 104.16.249.249/32) -> doh
     domain(suffix: cloudflare-dns.com) -> doh
-
-    # ---- Reality TCP 443 节点入口直连 ----
-    # 与同机 Web 共用 443：带 SNI 的流量已被上面域名规则接走，剩余裸 IP 直连
-    # 的才是节点入口。因此不放到更前面的规则段。
-    dip(203.0.113.10/32, 203.0.113.20/32, 203.0.113.30/32) && l4proto(tcp) && dport(443) -> direct(must)
 
     # 路由器自身地址直连，管理面板不被代理；服务启动时按本机地址重写下面区块
     # honk:local-direct-begin
@@ -228,8 +292,8 @@ routing {
     domain(geosite: category-ai-cn) -> direct
     domain(geosite: onedrive) -> direct
 
-    # ---- premium 特例（先于 fallback）----
-    domain(geosite:openai, geosite:anthropic, geosite:paypal) -> premium
+    # ---- PayPal 等出口质量敏感（先于 fallback）----
+    domain(geosite:paypal) -> premium
 
     # 前面全是直连，未命中的就是国外流量，进代理组。
     fallback: proxy

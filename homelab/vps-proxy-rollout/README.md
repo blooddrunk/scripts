@@ -33,26 +33,40 @@ SSH 隧道由终端里的 `ssh` 独立建立，打开浏览器前就可以用 `c
 
 ## 访问 1Panel
 
-带 1Panel 的三台 VPS 用 `panel.<节点域名>` 访问。记录只做 DNS 解析，请求经公网 443 的 Reality 回落到 OpenResty 的回环 8443，再反代到面板端口。这些记录不能开 CDN 代理，因为 zone 的 CDN 通用证书不覆盖两级子域。实际主机名、端口与入口路径保存在各机的私有运维记录中。
+带 1Panel 的三台 VPS 用 `panel-<主机别名>` 这样的一级子域名访问，并经 CDN 代理：请求先到 CDN 边缘，再到源站 443 的 Reality 回落、OpenResty 的回环 8443，最后反代到面板端口。zone 的 CDN 通用证书只覆盖一级子域，`panel.<节点域名>` 这类两级名字开不了代理，2026-11-24 已统一改为一级子域。`lightlayer` 未装 1Panel。实际主机名、端口与入口路径保存在各机的私有运维记录中。
 
-面板已绑定域名（BindDomain），只接受 Host 为该域名的 API 请求，按 IP 或其他域名直达面板端口的请求会被拦截。域名在公开 DNS 与证书日志里，所以这一层是纵深防御，真正的边界仍是回环监听加防火墙。
+三台面板都已开启二次验证（TOTP），并绑定域名（BindDomain）。绑定只接受 Host 为该域名的 API 请求，按 IP 或其他域名直达面板端口的请求会被拦截。域名在公开 DNS 与证书日志里，所以这一层是纵深防御，真正的边界是 CDN、回环监听加防火墙。
 
-公网路径不可用时改走 SSH 隧道，并把面板域名解析到本机。1Panel 比对时忽略端口，本地端口可以任选。先用 `ssh <主机别名>` 确认能登录，再把下面的占位符换成实际值。
+在对应机器上查看验证器密钥并添加到验证器应用后，才能登录面板：
 
 ```sh
-HOST='raksmart'; PANEL_PORT='<面板端口>'; LOCAL_PORT=28443
-ssh -o ExitOnForwardFailure=yes -NT -L "127.0.0.1:${LOCAL_PORT}:127.0.0.1:${PANEL_PORT}" "$HOST"
+ssh <主机别名> cat /root/1panel-mfa-enroll.txt
+```
+
+设备丢失时在机上执行 `1pctl reset mfa` 关闭二次验证，忘记域名绑定值时执行 `1pctl reset domain`。
+
+### 登录被锁时
+
+1Panel 对同一来源的登录失败计数：失败 10 次锁 5 分钟，首次失败后要求验证码。它只认 TCP 对端，而面板在 OpenResty 后面，公网请求和普通隧道在它眼里都是回环地址。所以任何人连续失败 10 次，都会把这些入口一起锁住，并且可以反复触发。已登录的会话不受影响。
+
+源站的 `limit_req` 按回环地址计数，是同一个共用的桶，只会多一个把登录打成 429 的途径。按真实来源的限速只能在 CDN 侧做。
+
+公网入口不可用或被锁时，改走 SSH 隧道，并把**目标写成本机的公网 IPv4**，不要写 `127.0.0.1`。这样面板看到的对端是公网地址，不会被公网上的失败连坐。1Panel 比对 BindDomain 时忽略端口，本地端口可以任选。先用 `ssh <主机别名>` 确认能登录，再把下面的占位符换成实际值。
+
+```sh
+HOST='raksmart'; ORIGIN_IP='<本机公网 IPv4>'; PANEL_PORT='<面板端口>'; LOCAL_PORT=28443
+ssh -o ExitOnForwardFailure=yes -NT -L "127.0.0.1:${LOCAL_PORT}:${ORIGIN_IP}:${PANEL_PORT}" "$HOST"
 ```
 
 保持隧道运行，另开终端验证。收到预期登录页的状态码后再打开浏览器。面板未开 HTTPS 的机器把 `https` 换成 `http`。
 
 ```sh
-PANEL_HOST='panel.<节点域名>'; PANEL_SCHEME='https'; PANEL_PATH='<入口路径>'
+PANEL_HOST='panel-<主机别名>'; PANEL_SCHEME='https'; PANEL_PATH='<入口路径>'
 curl --noproxy '*' --max-time 8 -fsS -o /dev/null -w '%{http_code}\n' \
   --resolve "${PANEL_HOST}:${LOCAL_PORT}:127.0.0.1" "${PANEL_SCHEME}://${PANEL_HOST}:${LOCAL_PORT}${PANEL_PATH}/"
 ```
 
-浏览器按 [Chrome 的域名映射方式](DEPLOY.md#用-chrome-打开登录页)打开，把示例域名换成 `panel.<节点域名>`，地址带本地端口。忘记绑定值时在机上执行 `1pctl reset domain` 可解除绑定。
+浏览器按 [Chrome 的域名映射方式](DEPLOY.md#用-chrome-打开登录页)打开，把示例域名换成 `panel-<主机别名>`，地址带本地端口。
 
 ## 配置如何工作
 
@@ -66,11 +80,11 @@ curl --noproxy '*' --max-time 8 -fsS -o /dev/null -w '%{http_code}\n' \
 
 三台 VPS（`raksmart`、`bitsflow`、`lightlayer-zh`）使用 1Panel OpenResty，`lightlayer` 使用 nginx。1Panel 新建或保存站点、更新 OpenResty 或续签证书后，复查站点仍使用回环 8443、原有 IPv6 监听正常、Xray 仍独占 IPv4 TCP 443。证书的续签需要让 Web 服务和 Hysteria 2 都加载到新证书。
 
-`lightlayer-zh`（2026-11-23 上线，CN 优化线路）按同一手册部署，几点差异：节点域名沿用机器自带的域名（泛域名证书，acme.sh `dns_cf` 续签），不遵循 `<主机别名>.haoqi90.top` 的命名；原 Hysteria 2 入站改名 `lightlayer-zh-hysteria2`（UDP 端口、跳跃范围与 Salamander 不变）；原非 443 的 Reality 入站于 2026-11-24 退役，现网只有 TCP 443 的 Reality 与同机 Hysteria 2。上线同日加装 1Panel v2.5.1 对齐 raksmart/bitsflow：OpenResty 应用经 agent.sock 自动化安装并接管回环 8443 回源（rollout 续签链路已切到 OpenResty，apt nginx 已停用）；面板管理端口仅回环/SSH 隧道可达（防火墙 REJECT 非回环），同时经公网 443 的 Reality 回落提供登录页，站点证书直接引用 `.vps-proxy-origin/current` 随续签换链。
+`lightlayer-zh`（2026-11-23 上线，CN 优化线路）按同一手册部署，几点差异：节点域名沿用机器自带的域名（泛域名证书，acme.sh `dns_cf` 续签），不遵循 `<主机别名>.haoqi90.top` 的命名；原 Hysteria 2 入站改名 `lightlayer-zh-hysteria2`（UDP 端口、跳跃范围与 Salamander 不变）；原非 443 的 Reality 入站于 2026-11-24 退役，现网只有 TCP 443 的 Reality 与同机 Hysteria 2。上线同日加装 1Panel v2.5.1 对齐 raksmart/bitsflow：OpenResty 应用经 agent.sock 自动化安装并接管回环 8443 回源（rollout 续签链路已切到 OpenResty，apt nginx 已停用）；面板管理端口仅回环/SSH 隧道可达（防火墙 REJECT 非回环），公网入口是经 CDN 代理的 1Panel 受管站点，使用面板自己签发的证书。
 
-带 1Panel 的三台（`raksmart`、`bitsflow`、`lightlayer-zh`）的面板地址于 2026-11-23 统一为 `panel.<节点域名>`，`lightlayer` 未装 1Panel。这些记录只做 DNS 解析、不开 CDN 代理：客户端连到公网 443，经 Reality 回落到 OpenResty 的回环 8443，再由按 SNI 匹配的站点反代到面板端口。实际主机名、端口与入口路径保存在各机的私有运维记录中。
+带 1Panel 的三台（`raksmart`、`bitsflow`、`lightlayer-zh`）的面板访问方式见[访问 1Panel](#访问-1panel)。
 
-用 1Panel 以 DNS 账号方式签发或续期证书前，确认 `_acme-challenge.<域名>` 已有一条常驻占位 TXT。1Panel 的传播预检在记录创建后立即查询，过早拿到的否定答案会被公共解析器缓存 30 分钟，预检可能卡满 30 分钟后失败；名字始终可解析就不会产生这种缓存。现有四条记录覆盖三台上全部以 DNS 方式签发的证书，acme.sh 签发的证书不受影响。
+用 1Panel 以 DNS 账号方式签发或续期证书前，确认 `_acme-challenge.<域名>` 已有一条常驻占位 TXT。1Panel 的传播预检在记录创建后立即查询，过早拿到的否定答案会被公共解析器缓存 30 分钟，预检可能卡满 30 分钟后失败；名字始终可解析就不会产生这种缓存。现有五条记录覆盖三台上全部以 DNS 方式签发的证书，acme.sh 签发的证书不受影响。
 
 ## 选节点和排查
 
