@@ -3,7 +3,7 @@
 > 状态：**已执行（2026-11-20 晚）**。实施结论见 §10；§7 score 日常观察留待使用中判断。
 > **本文描述的是线上现行旧方案**（premium 默认走 raksmart/旧 lightlayer 混合的美国池）。
 > 2026-11-25 定稿的新方案（AI 流量固定首选 lightlayer-zh、配额守护改盯 lightlayer-zh）
-> 见 [README.md](README.md)「配置架构」与 [quota/](quota/) 目录，尚待部署。
+> 见 [README.md](README.md)「配置架构」与 [quota/](quota/) 目录（已于 2026-11-25 部署）。
 > 依据 2026-11-20 对 honk 文档与 raksmart 现场（Sub-Store/komari）的实测研究。
 
 ## 0. 已定决策记录

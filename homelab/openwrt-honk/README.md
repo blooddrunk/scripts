@@ -8,9 +8,9 @@
 
 ## 配置架构（先读这一节）
 
-> **状态**：本节描述的是 2026-11-25 定稿的方案。它已经是仓库里的候选配置，通过了离线校验和
-> 隔离实验，**尚未部署**。线上 honk 现在跑的仍是 2026-11-20 的旧方案（见「分组与订阅设计」）。
-> 部署步骤见「把候选配置部署上线」。
+> **状态**：本节描述的方案 **已于 2026-11-25 12:14 部署上线**，此后线上就是它。
+> 部署过程与踩到的坑见「部署流程与 2026-11-25 部署记录」。2026-11-20 的旧方案已被取代，
+> 记录保留在「分组与订阅设计」一节。
 
 ### 一句话概括
 
@@ -77,7 +77,8 @@ lightlayer-zh 的流量最金贵，所以日常流量不碰它，只留给 AI �
 
 - **切走要多久**：有人在用时，失败的连接会触发加急检查，一般十几秒到几十秒内切走
   （这是按源码逻辑估的；隔离实验只能实测"没有流量反馈"的情况，是 33 秒）。
-  完全没流量时只能等常规检查，最长几分钟。
+  完全没流量时只能等常规检查，最长几分钟。上线当天的第一次真实故障见「部署记录」：
+  Hy2 节点 16:30:21 被判死，Reality 节点 16:34:16 被判死后 AI 流量顺延到 raksmart。
 - **恢复后多久切回**：自动，不用人工干预。honk 每隔一段时间探测挂掉的机器，连续两次成功才算恢复；
   挂得越久探测间隔拉得越长，切回最多要等 5 分钟左右。
 
@@ -179,13 +180,13 @@ UDP 可用、IPv6 正常）不需要这些。逐项裁决：
 
 ## 分组与订阅设计（2026-11-20 二次改造后）
 
-> **这是线上现行的方案**，将被上文的候选方案取代。大白话版：
+> **这是 2026-11-25 之前的线上方案**，已被上文的「配置架构」取代，保留作记录。大白话版：
 > - 没有独立的 lightlayer-zh。raksmart 和旧的 lightlayer 两个节点混在一个"美国池"（`us`）里，
 >   自动用延迟低的那个，所以实际出口会在两台之间漂（11-24 审查时漂到了 lightlayer）。
 > - AI 流量（`premium`）默认走这个美国池，不固定是 raksmart；配额脚本只看 raksmart 的流量，
 >   在 raksmart 快用完时把 AI 流量切到 bitsflow。
 > - 日常流量（`proxy`）在美国池和 bitsflow 之间按实际效果自动选。
-> 候选方案把"每台 VPS 一个组"作为基本单位，AI 流量固定首选 lightlayer-zh。下表是旧方案的原样记录。
+> 新方案把"每台 VPS 一个组"作为基本单位，AI 流量固定首选 lightlayer-zh。下表是旧方案的原样记录。
 
 Sub-Store 统一入口、每 VPS 单订阅导出（`/download/<vps>`，全部 `route: direct`），
 **订阅 tag 即池身份**（`subtag()` 过滤，节点改名/随机后缀不影响分组；首版 name(keyword) 方案已弃用）：
@@ -217,8 +218,8 @@ nosla 不订阅自动绝迹。bitsflow 入口直连规则：hy2 固定口 47625 
 
 ## 2026-11-24 审查：订阅韧性、DNS 泄漏面与 VPS 增删
 
-对象是线上 `/etc/honk/config.dae`（2026-11-20 23:42 版，此后未改）加运行态实测。
-对应的修订版是 [config.home.dae.example](config.home.dae.example)，**候选，尚未部署**。
+对象是当时的线上 `/etc/honk/config.dae`（2026-11-20 23:42 版）加运行态实测。
+这次审查促成了 2026-11-25 的新方案（已部署，见「配置架构」），模板是 [config.home.dae.example](config.home.dae.example)。
 
 ### 某个订阅失效会不会拖累整体：不会
 
@@ -257,11 +258,11 @@ Sub-Store 里已删的订阅返回 404 + JSON（`nosla` 现状），同属"拉�
 
 | 级别 | 项 | 说明 | 处置 |
 |---|---|---|---|
-| 高 | lightlayer-zh 未接入 | Sub-Store 已有该订阅，honk 未订阅、无 filter、无入口规则 | 候选配置 |
-| 高 | 配置文件权限 | `/etc/honk/config.dae` 与两份 `.bak` 是 0644，内含订阅 token 与 clash secret；机器上有 dnsmasq、avahi、rpcbind 等降权账户 | `chmod 600 /etc/honk/config.dae /etc/honk/config.dae.bak*` |
+| 高 | lightlayer-zh 未接入 | Sub-Store 已有该订阅，honk 未订阅、无 filter、无入口规则 | 已解决：11-25 部署 |
+| 高 | 配置文件权限 | `/etc/honk/config.dae` 与两份 `.bak` 是 0644，内含订阅 token 与 clash secret；机器上有 dnsmasq、avahi、rpcbind 等降权账户 | 已解决：11-25 已 `chmod 600` |
 | 高 | 操作流程 | 见下文「操作铁律」，validate 有盲区 | 流程约束 |
-| 中 | premium 出口漂移 + 配额盲区（线上旧方案） | `us` 是 min_moving_avg 池，当前实际出口是 `lightlayer-hysteria2` 而非 raksmart；`quota-switch.sh` 只盯 raksmart 的 komari 数据。komari 现有 Raksmart、Bitsflow、Lightlayer-zh（11-24 接入，每月 18 日重置，与 raksmart 的 16 日不同步），lightlayer 没有 agent | 候选配置已解决，见「配置架构」 |
-| 中 | bootstrap 明文 | 见上表 | 候选已改 `223.5.5.5:53` |
+| 中 | premium 出口漂移 + 配额盲区（旧方案） | `us` 是 min_moving_avg 池，审查时实际出口是 `lightlayer-hysteria2` 而非 raksmart；`quota-switch.sh` 只盯 raksmart 的 komari 数据。komari 现有 Raksmart、Bitsflow、Lightlayer-zh（11-24 接入，每月 18 日重置，与 raksmart 的 16 日不同步），lightlayer 没有 agent | 已解决：11-25 部署，见「配置架构」 |
+| 中 | bootstrap 明文 | 见上表 | 已解决：11-25 改 `223.5.5.5:53` |
 | 低 | 崩溃后无自愈 | procd `respawn 3600 5 5`：一小时内崩 5 次就不再拉起，也没有告警 | 可选：cron 健康检查 |
 | 低 | 旁路钩子 | `dscp(4) -> direct(must)` 是包默认规则，LAN 客户端给包打上 DSCP 4 即可绕过分流；STUN 3478 直连会让 WebRTC 向对端暴露家宽 IP，这是为 NAT 穿越做的取舍 | 知悉即可 |
 
@@ -336,7 +337,7 @@ raksmart 和 bitsflow 继续动态平衡。据此定稿：
 5. `python3 tools/honk_subs.py --candidate /tmp/config.dae`：代入路由器上的真实值生成
    完整配置（0600），并对照订阅实际内容审计。漏规则、漏 filter、URL 写错、
    订阅名在 Sub-Store 里不存在，都会报出来且不落盘。
-6. 按「把候选配置部署上线」部署。
+6. 按「部署流程与 2026-11-25 部署记录」里的流程部署。
 
 退役一台：删订阅行、删它的单 VPS 组、删用途组里引用它的那一行、删它的规则块，
 同样走第 5、6 步。`group(...)` 的引用漏删不会静默：热重载会被拒绝，旧配置继续运行。
@@ -351,7 +352,7 @@ raksmart 和 bitsflow 继续动态平衡。据此定稿：
 工具只为**配置里已订阅的**订阅生成规则：Sub-Store 里另有两个第三方机场订阅
 （`zh-vless`、`zh-hysteria`），它们的节点不会被列出，也不会生成任何直连规则。
 
-### 候选配置相对线上的改动
+### 2026-11-25 相对旧方案的改动
 
 1. **组结构重组**：每台 VPS 一个组，组末用 `final` 逐级兜底。`premium` 的首选从"美国池"
    改为 `lightlayer-zh`；`doh` 的兜底是 `lightlayer-zh`；日常流量不再有"美国池"。
@@ -364,35 +365,64 @@ raksmart 和 bitsflow 继续动态平衡。据此定稿：
    [quota/config.sh.example](quota/config.sh.example)。
 7. 其余只有注释更正（`client_subnet`、`bootstrap` 的用途、dnsmasq 豁免的副作用）。
 
-候选配置已通过工具审计与路由器上的离线校验（`honk-core config validate`），
-行为验证见「候选方案的验证」。配额脚本在本地假接口上跑过 9 个场景（滞回各区间的切换与保持、
+上线前做过工具审计、路由器上的离线校验（`honk-core config validate`）和隔离实验
+（见「候选方案的验证」）。配额脚本在本地假接口上跑过 9 个场景（滞回各区间的切换与保持、
 手动选择不干预、取数失败不改选择、日常机告警、首周期补偿），并在路由器上对真实接口
-做过一次只打印不切换的 DRY_RUN。
+做过只打印不切换的 DRY_RUN。
 
-### 把候选配置部署上线
+### 部署流程与 2026-11-25 部署记录
 
-**需要你确认后再做。** 配置和配额脚本必须一起换：旧脚本按 raksmart 的配额在 `us` / `jp`
-之间切 premium，而新配置里 premium 的首选是 `lightlayer-zh`，旧脚本会在半小时内把它切走。
+**部署记录（2026-11-25 12:14，经 tailnet 远程执行）**
 
-1. 电脑上生成并审计候选配置：
-   `python3 tools/honk_subs.py --candidate /tmp/config.dae`，审计结论必须是"无问题"。
-2. 上传到路由器：`/tmp/config.dae` → `/tmp/config.dae.new`；
-   `quota/quota-switch.sh` → `/root/honk-quota/quota-switch.sh.new`。
-3. 路由器上按 [quota/config.sh.example](quota/config.sh.example) 准备新的 `config.sh`
-   （0600）：保留原来的 `KOMARI_BASE`、`CLASH_SECRET`，补上 lightlayer-zh 的 uuid、组名和补偿量。
-4. 路由器上先空跑脚本：
-   `DRY_RUN=1 QUOTA_CONF=<新 config.sh> sh /root/honk-quota/quota-switch.sh.new`，
-   应打印 `premium us -> lightlayer-zh` 的 DRY_RUN 决策。
-5. 备份 `/etc/honk/config.dae`，挂一个 420 秒后把备份拷回去并 `honk-core reload` 的 watchdog。
-6. 换脚本：`quota-switch.sh.new` 覆盖 `quota-switch.sh`（0700），新的 `config.sh` 就位。
-   先换脚本再换 honk 配置是安全的：新脚本面对旧配置只会报一次 `premium_set failed`，不改任何东西。
-7. 换配置：`install -m 600 /tmp/config.dae.new /etc/honk/config.dae`，然后 `honk-core reload`。
-8. 验证，全部通过才撤 watchdog：
-   - `python3 tools/honk_subs.py router-home` 无问题；
-   - premium 的 `now` 是 `lightlayer-zh`（脚本半小时内会自动切过去，也可以手动跑一次脚本）；
-   - 经 tailnet 的 SSH 仍在，`tailscale status` 正常；
-   - `logread | grep honk` 没有 parse 告警，没有 "marked dead" 之外的异常。
-9. 顺手 `chmod 600 /etc/honk/config.dae /etc/honk/config.dae.bak*`。
+- 热重载一次通过：日志出现 `Configuration applied — 49 routes active` 和
+  `SIGHUP reload … applied outcome=Committed`，四个订阅随即全部发布。
+  重载前后连接数都是 12，已建立的连接没有被断，SSH 全程存活，看门狗未触发。
+- 线上验证：premium 切到 lightlayer-zh 后，AI 站点的出口 IP 是 lightlayer-zh，
+  普通国外网站不是。Gemini 的域名没有回显出口 IP 的接口，只验证了可达。
+- 备份在路由器 `/root/honk-quota/backup-20261125-121446/`（旧的 config.dae、quota-switch.sh、config.sh）。
+  要整体回退，把这三个文件拷回原位再 `honk-core reload`。
+- 顺手把 `/etc/honk/config.dae` 与三份旧备份的权限收到了 0600。
+- **上线当天的第一次真实故障**：16:30:21 lightlayer-zh 的 Hy2 节点被判死，16:34:16 Reality
+  节点也被判死，AI 流量顺延到 raksmart；16:49:35 和 16:50:36 两个节点先后被判恢复，AI 流量
+  自动切回。期间配额脚本报过一次"取 lightlayer-zh 流量失败"（16:30），按设计没有动任何选择。
+  故障原因没有查明：同一时段 komari 上 lightlayer-zh 的 agent 也停止上报了几分钟，
+  更像那台 VPS 自身或它的线路出了状况。15:00 到 16:00 另有几次 bitsflow 取数失败，17:00 起恢复。
+
+**下次改配置的流程**（这次实际走过的步骤，已按踩到的坑修正）
+
+1. 电脑上生成并审计：`python3 tools/honk_subs.py --candidate /tmp/config.dae`，结论必须是"无问题"。
+2. 上传到路由器的暂存位置。**暂存的 honk 配置文件名必须以 `.dae` 结尾**（如 `/tmp/config.new.dae`），
+   否则 `honk-core config validate` 直接拒绝；然后用它做离线校验。路由器上没有 `install` 命令，
+   用 `cp` 加 `chmod`。
+3. 路由器上准备新的 `config.sh`：从 [quota/config.sh.example](quota/config.sh.example) 出发，
+   带上原来的 `KOMARI_BASE`、`CLASH_SECRET`。**生成后把各个值从新文件里读回来核对。**
+   这次我用 sed 生成时误删了 `KOMARI_BASE` 的 `https://`，脚本于是按明文 HTTP 请求，
+   komari 前面的 openresty 回 301，表现为"取流量失败"，我一度误判成 komari 服务不稳定。
+4. 空跑：`DRY_RUN=1 QUOTA_CONF=<新 config.sh> sh /root/honk-quota/quota-switch.sh.new`，
+   应打印 `DRY_RUN: premium … -> lightlayer-zh`。
+5. 备份三个文件（honk 配置、quota-switch.sh、config.sh），挂 watchdog：
+   `nohup setsid sh -c 'echo $$ > <pidfile>; sleep 420; [ -e <ok 标记> ] && exit 0; <拷回三个文件>; honk-core reload' &`。
+   撤除时先建 ok 标记，再把父进程和它留下的 `sleep` 子进程都杀掉。
+6. 先换配额脚本与 config.sh，再换 honk 配置（0600），然后 `honk-core reload`。
+   这条命令只是给 `/run/honk-core.lock` 里记录的进程发一个 SIGHUP；之后要在
+   `logread | grep honk-core` 里确认出现 `Configuration applied` 和 `outcome=Committed`。
+7. 验证通过后撤 watchdog，删除暂存文件。
+
+**从路由器上验证分流时的注意点**
+
+- clash API 的 `/connections` 里看不到路由器自身发起的连接，只能看到 LAN 设备的。
+- 路由器自己查 DNS 走被污染的运营商通道（见「DNS 泄漏面」）。honk 会校验嗅探到的域名与
+  目标 IP 是否对得上，对不上就不按域名分流。所以用 `curl -4` 访问运营商给的假地址时，
+  AI 网站会走日常组而不是 AI 组。这是测试方法的问题，家里设备不受影响。
+  要模拟家里设备，用 honk DNS 返回的真实地址：
+
+  ```sh
+  S=$(sed -n "s/^ *secret: *'\(.*\)' *$/\1/p" /etc/honk/config.dae)
+  A=$(curl -s -H "Authorization: Bearer $S" "http://127.0.0.1:9090/dns/query?name=chatgpt.com&type=A" | grep -o '"data":"[0-9.]*"' | cut -d'"' -f4)
+  curl -4 -s --resolve chatgpt.com:443:$A https://chatgpt.com/cdn-cgi/trace | grep '^ip='   # 应为 lightlayer-zh 的 IP
+  ```
+
+- 路由器的 `sleep` 只接受整数秒。
 
 ### 范围外观察（同机，与 honk 无关）
 
@@ -485,7 +515,7 @@ apk update && apk upgrade honk luci-app-honk   # 或 LuCI → 服务 → Honk �
 ## 后续计划
 
 - [quota-aware-policy-plan.md](quota-aware-policy-plan.md) —— **已于 2026-11-20 晚执行完毕**（结论与偏差见 plan §10 及上文实施记录二）。遗留观察：§7 score 稳定性判据（3–7 天）、bitsflow-hysteria2 dead 状态、router 本机 DNS 污染路径根治。它描述的是线上现行旧方案的配额策略。
-- 2026-11-25 定稿的候选配置（lightlayer-zh 首选 + `final` 逐级兜底 + 新的配额守护）**待部署**，步骤见「把候选配置部署上线」。
+- 2026-11-25 新方案（lightlayer-zh 首选 + `final` 逐级兜底 + 新的配额守护）已部署；仓库改动尚未提交。
 - 部署后待办：在家实测 LAN 侧的 DNS 与 IPv6（[LAN-RUNBOOK.md](LAN-RUNBOOK.md)）；旧 lightlayer 退役时按「VPS 增删清单」删四处。
 
 ## 已知关联问题（非本次范围，记录备查）
