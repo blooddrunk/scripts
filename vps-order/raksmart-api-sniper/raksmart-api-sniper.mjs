@@ -19,6 +19,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { argv, env, exit } from 'node:process';
 import { randomBytes } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 
 /* ================= 常量（逆向自 rak-ec-service.raksmart.com） ================= */
 
@@ -63,7 +64,7 @@ const DEFAULTS = {
   // 抢购节奏
   preflightQuoteIntervalMs: 5000,   // 等待期报价巡检间隔（顺带刷新结账用折扣 id）
   skipPreflightQuote: false,        // true 等同命令行 --skip-quote：跳过预检，开抢直接加购
-  orderIntervalMs: 450,             // 场次内 add-order 重试间隔（库存不足时）
+  orderIntervalMs: 5000,            // 加购请求的最小发送间隔，也是单个 worker 的常规重试间隔
   orderTimeoutMs: 15000,            // 单次下单请求超时
   quoteTimeoutMs: 15000,
   checkoutQuoteMaxAttempts: 3,     // 结账前补报价的总次数；0 表示临时故障时持续重试
@@ -179,6 +180,16 @@ class CookieJar {
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
+function retryAfterMs(headers) {
+  const value = headers.get('retry-after')?.trim();
+  if (!value) return 0;
+  if (/^\d+$/.test(value)) return Number(value) * 1000;
+  const retryAt = Date.parse(value);
+  if (!Number.isFinite(retryAt)) return 0;
+  const serverDate = Date.parse(headers.get('date'));
+  return Math.max(0, retryAt - (Number.isFinite(serverDate) ? serverDate : Date.now()));
+}
+
 class Http {
   constructor(jar) { this.jar = jar; }
 
@@ -263,7 +274,7 @@ class Http {
     });
     let json = null;
     try { json = await response.json(); } catch { /* 非 JSON 响应按 null 处理 */ }
-    return { status: response.status, ok: response.ok, body: json };
+    return { status: response.status, ok: response.ok, body: json, retryAfterMs: retryAfterMs(response.headers) };
   }
 }
 
@@ -797,15 +808,29 @@ async function run() {
 
   const windowEnd = schedule.end;
   const PARALLEL = Math.max(1, Math.min(5, Math.floor(Number(CONFIG.parallel) || 1)));
-  const counter = { attempt: 0, ambiguous: 0, loginRetries: 0 };
+  const configuredInterval = Number(CONFIG.orderIntervalMs);
+  let orderIntervalMs = Number.isFinite(configuredInterval) && configuredInterval > 0
+    ? configuredInterval : DEFAULTS.orderIntervalMs;
+  const counter = { attempt: 0, ambiguous: 0, loginRetries: 0, rateLimited: 0 };
+  const orderStop = new AbortController();
+  let nextOrderAt = 0;
+  let cooldownUntil = 0;
+  let cooldownMs = 15000;
   let success = null;
-  let stopFlag = false;
+
+  const waitForOrder = async (ms) => {
+    const waitMs = Math.min(ms, windowEnd - now(clockOffset));
+    if (waitMs <= 0 || orderStop.signal.aborted) return;
+    try {
+      await delay(waitMs, undefined, { signal: orderStop.signal });
+    } catch (error) {
+      if (!orderStop.signal.aborted) throw error;
+    }
+  };
 
   const purchaseWorker = async (workerIndex) => {
-    // 并行时各 worker 错开半个间隔，避免完全同步打出
-    await sleep(workerIndex * (CONFIG.orderIntervalMs / Math.max(1, PARALLEL)));
-
     if (DRY_RUN) {
+      await sleep(workerIndex * (orderIntervalMs / PARALLEL));
       log('--dry-run：不提交订单，窗口内仅持续校验报价');
       while (now(clockOffset) < windowEnd) {
         const check = await withRetries('报价', () => quote(http, params), 2, 2000);
@@ -815,7 +840,15 @@ async function run() {
       return;
     }
 
-    while (!stopFlag && !success && now(clockOffset) < windowEnd) {
+    while (!orderStop.signal.aborted && (workerIndex === 0 || !counter.rateLimited) && now(clockOffset) < windowEnd) {
+      const timestamp = now(clockOffset);
+      const waitMs = Math.max(nextOrderAt, cooldownUntil) - timestamp;
+      if (waitMs > 0) {
+        await waitForOrder(waitMs);
+        continue;
+      }
+      // 所有 worker 共用一个发送间隔，预约发送时间后再等待响应。
+      nextOrderAt = timestamp + orderIntervalMs;
       counter.attempt += 1;
       const attemptNo = counter.attempt;
       let result;
@@ -826,7 +859,7 @@ async function run() {
         if (workerIndex === 0) {
           log(`#${attemptNo} 网络异常（${error.message}），继续重试（累计歧义请求 ${counter.ambiguous}）`);
         }
-        await sleep(CONFIG.orderIntervalMs);
+        await waitForOrder(orderIntervalMs);
         continue;
       }
 
@@ -838,8 +871,19 @@ async function run() {
         } else {
           log(`⚠ 第 ${attemptNo} 次尝试也成功（cart ${body.cart.id}），仅结账第一个，多余购物车请到订购页清理`);
         }
-        stopFlag = true;
+        orderStop.abort();
         return;
+      }
+      if (status === 429 || body?.error_code === 'order_rate_limit_exceeded') {
+        counter.rateLimited += 1;
+        const limitedAt = now(clockOffset);
+        // 同一批在途请求可能同时遇到限流，只在每轮冷却开始时延长退避。
+        if (limitedAt >= cooldownUntil) cooldownMs = Math.min(cooldownMs * 2, 300000);
+        cooldownUntil = Math.max(cooldownUntil, limitedAt + Math.max(cooldownMs, result.retryAfterMs));
+        orderIntervalMs = Math.max(orderIntervalMs, 10000);
+        const waitSeconds = Math.ceil((cooldownUntil - limitedAt) / 1000);
+        log(`#${attemptNo} 加购限流（HTTP ${status}），暂停所有加购 ${waitSeconds} 秒，冷却后以单路重试`);
+        continue;
       }
       if (status === 401) {
         counter.loginRetries += 1;
@@ -848,7 +892,7 @@ async function run() {
         await login(http, Date.now() + 60_000);
         continue;
       }
-      const message = body?.message || body?.error || JSON.stringify(body)?.slice(0, 120);
+      const message = body?.message || body?.msg || body?.error || JSON.stringify(body)?.slice(0, 120);
       if (status === 400 && /库存不足|售罄|sold out|out of stock/i.test(String(message))) {
         if (attemptNo <= 3 || attemptNo % 10 === 1) log(`#${attemptNo} 库存不足，继续重试`);
       } else if (status === 400 && /活动|activity/i.test(String(message))) {
@@ -856,11 +900,11 @@ async function run() {
       } else {
         log(`#${attemptNo} HTTP ${status}：${message}`);
         if (status === 400 && /configoption|customfield|invalid_data/i.test(String(body?.code))) {
-          stopFlag = true;
+          orderStop.abort();
           die('下单参数被服务端拒绝（配置项错误），终止。请核对 configOptions 配置');
         }
       }
-      await sleep(CONFIG.orderIntervalMs);
+      await waitForOrder(orderIntervalMs);
     }
   };
 
@@ -872,6 +916,8 @@ async function run() {
       log('窗口结束（--dry-run 模式，未提交任何订单）');
     } else if (ambiguous > 0) {
       log(`⚠ 窗口结束且存在 ${ambiguous} 个结果不明的请求，请人工确认是否已生成订单：${BILLING_ORIGIN}/whmcs/clientarea.php`);
+    } else if (counter.rateLimited > 0) {
+      log(`✗ 窗口结束，未能加购（期间收到 ${counter.rateLimited} 次限流响应）`);
     } else {
       log('✗ 窗口结束，未能抢到（库存不足）');
     }

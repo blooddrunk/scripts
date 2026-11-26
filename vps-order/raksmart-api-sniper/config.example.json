@@ -21,7 +21,7 @@
 
   "preflightQuoteIntervalMs": 5000,
   "skipPreflightQuote": false,
-  "orderIntervalMs": 450,
+  "orderIntervalMs": 5000,
   "orderTimeoutMs": 15000,
   "quoteTimeoutMs": 10000,
   "checkoutQuoteMaxAttempts": 3,
