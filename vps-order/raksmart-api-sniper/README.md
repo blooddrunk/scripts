@@ -6,7 +6,8 @@ Medusa 后端完成「登录 → 报价校验 → 下单 → 结账」全链路�
 
 本目录包含：
 
-- `raksmart-api-sniper.mjs` —— Node.js 独立抢购脚本（零依赖，Node ≥ 18）
+- `raksmart-api-sniper.mjs` —— Node.js 抢购与报价监控脚本（零依赖，Node ≥ 18）
+- `telegram.mjs` —— 可供其他 Node.js 脚本导入的 Telegram 通知模块
 - `config.example.json` —— 配置模板
 - 本 README —— 完整接口逆向文档（两个方案共用）
 
@@ -49,11 +50,27 @@ cd vps-order/raksmart-api-sniper && \
 
 `--force` 可跳过本地的场次去重记录。`--skip-quote` 可让脚本开抢时直接加购，详情见下文。
 
+### 报价监控和 Telegram 通知
+
+在脚本目录运行 `node raksmart-api-sniper.mjs --monitor`，立即读取配置中的商品，之后每 60 秒查询一次公开报价和活动状态。这个模式无需账号，且只读取商品模板和报价。只有活动明确返回售罄或库存不足时才显示「活动库存不足」，其他情况显示「活动库存未确认」。加上 `--once` 可查询一次后退出。
+
+脚本自动读取 `~/.config/raksmart-api-sniper/telegram.env`。若设置了 `XDG_CONFIG_HOME`，则从该配置目录读取。环境变量优先于文件中的值。配置文件权限设为 `600`，格式如下。
+
+```dotenv
+TELEGRAM_BOT_TOKEN=替换为BotFather提供的Token
+TELEGRAM_CHAT_ID=替换为接收通知的ChatID
+```
+
+在 Telegram 打开机器人并点击「开始」后，运行 `node raksmart-api-sniper.mjs --test-telegram` 发送测试消息。其他 Node.js 脚本可以导入 `telegram.mjs` 的 `sendTelegramMessage` 函数。
+
+- `--monitor` 会推送首条结果及价格、活动、库存信号或接口故障的变化。遇到 403 或浏览器验证时退出并推送原因。
+- 自动下单模式根据实际加购响应报告库存。Telegram 会推送下单窗口开始、首次库存不足、首次限流、加购成功、结账结果和无法继续下单的原因。结账响应提供订单号或账单号时，通知会附上对应号码和客户中心链接。
+
 ## 哪些步骤是下单必须的？
 
 | 步骤 | 必须？ | 失败时的行为 |
 |---|---|---|
-| 登录（4 跳 OAuth） | ✅ 必须 | 网络类错误**指数退避持续重试直到场次结束**；账密错误立即终止 |
+| 登录（4 跳 OAuth） | ✅ 必须 | 网络类错误**指数退避持续重试直到场次结束**。HTTP 403 或 Cloudflare 浏览器验证会显示受影响的端点并立即退出 |
 | 商品模板 `products/template/whmcs/<pid>` | ✅ 必须（下单 body 的 product_id/group_id/配置项来自它） | **持续重试直到场次结束**，场次结束仍失败才终止 |
 | 时钟校准 | ❌ 非必须 | 从登录链路/模板响应的 `Date` 头**顺带采样**（零额外请求）；采不到就按偏移 0 继续，只影响开抢卡点精度 |
 | 首次报价 `get-product-price` | ❌ 加购前可跳过 | 校验预期价格和优惠券。预检失败仍可加购 |
@@ -122,8 +139,8 @@ WHMCS（计费）混合架构。
    body: username=<邮箱URL编码>&password=<密码URL编码>
    → 302（种 WHMCS 会话 Cookie）
    ↓
-② GET https://rak-ec-service.raksmart.com/store/oauth?rt=https%3A%2F%2Fwww.raksmart.com
-   （必须带 Origin: https://billing.raksmart.com 头，否则 404）
+② GET https://rak-ec-service.raksmart.com/store/oauth
+   （脚本带 Origin: https://billing.raksmart.com 头对齐浏览器行为）
    → 302 https://billing.raksmart.com/whmcs/oauth/authorize.php?...&state=...（种 connect.sid#1）
    ↓
 ③ GET authorize.php?response_type=code&redirect_uri=...&client_id=RAKSMART.164d6cf1a3b751d63eaf2187930c5279
@@ -131,11 +148,13 @@ WHMCS（计费）混合架构。
    → 302 .../store/oauth/callback?code=...&state=...
    ↓
 ④ GET callback（携带 ② 的 connect.sid）
-   → 302 www.raksmart.com；种认证 connect.sid + WHMCSCustomerID=cus_...
+   → 302 https://billing.raksmart.com/ec（不带 rt 时的默认跳转目标）；种认证 connect.sid + WHMCSCustomerID=cus_...
 ```
 
-之后所有 `/store/*` 请求带最终 `connect.sid` 即为登录态。
+脚本保存第 ④ 跳响应中的会话 Cookie，随后直接验证登录。之后所有 `/store/*` 请求带最终 `connect.sid`。
 校验：`GET /store/customers/me` → 200 返回 `customer`；未登录 401 `{"code":401,"message":"Invalid token"}`。
+
+浏览器实际访问的是 `/store/oauth?rt=https%3A%2F%2Fwww.raksmart.com`，脚本有意不带 `rt`：Raksmart 的 Cloudflare 规则会对**查询串含 `www.raksmart.com`** 的请求下发浏览器验证（2026-11-27 实测，与路径、参数名、编码方式和请求头无关），脚本无法完成；`rt` 只决定登录完成后的跳转目标，脚本用不到。如果日志仍提示 Cloudflare 浏览器验证，说明规则有变，可改用浏览器（Tampermonkey 版）登录和下单。
 
 ### 2. 报价（**无需登录**，可匿名轮询）
 
@@ -224,7 +243,7 @@ POST /store/custom/whmcs-cart/checkout-cart   （需登录）
 ```
 
 - `200` → `body.invoice_url`（付款页）或 `body.whmcs_order.data.orderid/invoiceid`
-- `202` → 已下单，去账单列表付款：`https://billing.raksmart.com/whmcs/clientarea.php`
+- `202` → 结账已受理，请到客户中心确认订单和账单：`https://billing.raksmart.com/whmcs/clientarea.php`
 
 ### 实测时延参考（2026-11-16，本机 → SJC 边缘）
 

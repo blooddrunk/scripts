@@ -6,12 +6,14 @@
  *   登录(表单 POST + OAuth 四跳) → 轮询报价 → add-order → checkout-cart
  *
  * 用法：
- *   node raksmart-api-sniper.mjs [--config ./config.json] [--dry-run] [--force] [--once]
+ *   node raksmart-api-sniper.mjs [--config ./config.json] [--monitor] [--test-telegram] [--dry-run] [--force] [--once]
  *
  * 配置优先级：命令行 --config 指定的 JSON > 环境变量 > 内置 DEFAULTS。
  * 密码建议用环境变量 RAKSMART_PASSWORD 传入，避免写进文件。
  *
  * --dry-run 走完整链路但只轮询报价、绝不提交订单；
+ * --monitor 匿名监控报价和活动状态；加 --once 时只检查一次；
+ * --test-telegram 发送一条 Telegram 测试消息后退出；
  * --force   忽略本地“本场已下单”状态文件强制开跑；
  * --once    不等待场次，立即做一次报价校验后退出（用于验证配置/登录）。
  */
@@ -19,7 +21,10 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { argv, env, exit } from 'node:process';
 import { randomBytes } from 'node:crypto';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { sendTelegramMessage } from './telegram.mjs';
 
 /* ================= 常量（逆向自 rak-ec-service.raksmart.com） ================= */
 
@@ -27,9 +32,12 @@ const API_BASE = 'https://rak-ec-service.raksmart.com/store';
 const BILLING_ORIGIN = 'https://billing.raksmart.com';
 const PUBLISHABLE_KEY = 'pk_01HKV8SJC13X083AN545TWEPS4';
 const LOGIN_URL = `${BILLING_ORIGIN}/whmcs/medusa-login.php`;
+const OAUTH_CALLBACK_URL = `${API_BASE}/oauth/callback`;
 const STATE_FILE = new URL('./.raksmart-sniper-state.json', import.meta.url);
+const CLIENT_AREA_URL = `${BILLING_ORIGIN}/whmcs/clientarea.php`;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MONITOR_INTERVAL_MS = 60000;
 
 /* ================= 默认配置 ================= */
 
@@ -89,6 +97,7 @@ function parseArgs() {
 
 const { flags, configPath } = parseArgs();
 const DRY_RUN = flags.has('dry-run');
+const MONITOR = flags.has('monitor');
 const FORCE = flags.has('force');
 const ONCE = flags.has('once');
 const SKIP_QUOTE_FLAG = flags.has('skip-quote') || flags.has('no-quote');
@@ -109,6 +118,26 @@ function loadConfig() {
 
 const CONFIG = loadConfig();
 
+function loadTelegramConfig() {
+  const values = {};
+  if (env.TELEGRAM_BOT_TOKEN === undefined || env.TELEGRAM_CHAT_ID === undefined) {
+    const configDir = env.XDG_CONFIG_HOME || join(homedir(), '.config');
+    const path = join(configDir, 'raksmart-api-sniper', 'telegram.env');
+    if (existsSync(path)) {
+      for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+        const match = line.match(/^\s*(TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID)\s*=\s*(.*?)\s*$/);
+        if (match) values[match[1]] = match[2].replace(/^(['"])(.*)\1$/, '$2');
+      }
+    }
+  }
+  return {
+    botToken: env.TELEGRAM_BOT_TOKEN ?? values.TELEGRAM_BOT_TOKEN,
+    chatId: env.TELEGRAM_CHAT_ID ?? values.TELEGRAM_CHAT_ID,
+  };
+}
+
+const telegramConfig = loadTelegramConfig();
+
 // 跳过加购前的报价请求。自动结账仍需确认报价和优惠券。
 const SKIP_QUOTE = SKIP_QUOTE_FLAG || Boolean(CONFIG.skipPreflightQuote);
 
@@ -122,6 +151,31 @@ function log(...parts) {
 function die(message, code = 1) {
   console.error(`✗ ${message}`);
   exit(code);
+}
+
+async function notifyTelegram(text) {
+  if (!telegramConfig.botToken && !telegramConfig.chatId) return true;
+  try {
+    await sendTelegramMessage(text, telegramConfig);
+    return true;
+  } catch (error) {
+    log(`⚠ ${error.message}`);
+    return false;
+  }
+}
+
+let orderNotifications = Promise.resolve();
+
+function notifyOrder(text) {
+  orderNotifications = orderNotifications.then(() => notifyTelegram(`Raksmart 商品 ${CONFIG.pid}｜${text}`));
+}
+
+async function stopOrder(message, notice) {
+  if (!DRY_RUN && !ONCE) {
+    notifyOrder(notice);
+    await orderNotifications;
+  }
+  die(message);
 }
 
 /* ================= Cookie Jar（够用的最小实现） ================= */
@@ -193,7 +247,9 @@ function retryAfterMs(headers) {
 class Http {
   constructor(jar) { this.jar = jar; }
 
-  async request(url, { method = 'GET', body, headers = {}, timeoutMs = 15000, maxRedirects = 0, redirectOrigin } = {}) {
+  async request(url, {
+    method = 'GET', body, headers = {}, timeoutMs = 15000, maxRedirects = 0, redirectOrigin, stopAtRedirectFrom,
+  } = {}) {
     let currentUrl = url;
     let currentMethod = method;
     let currentBody = body;
@@ -202,6 +258,7 @@ class Http {
 
     for (let hop = 0; hop <= maxRedirects; hop += 1) {
       const parsed = new URL(currentUrl);
+      const endpoint = `${parsed.origin}${parsed.pathname}`;
       const baseHeaders = {
         'User-Agent': UA,
         Accept: 'application/json, text/plain, */*',
@@ -230,7 +287,7 @@ class Http {
         });
       } catch (error) {
         if (error?.name === 'AbortError') {
-          throw new Error(`请求超时（${timeoutMs}ms）：${currentMethod} ${currentUrl}`);
+          throw new Error(`请求超时（${timeoutMs}ms）：${currentMethod} ${endpoint}`);
         }
         throw error;
       } finally {
@@ -240,11 +297,11 @@ class Http {
       const dateHeader = response.headers.get('date');
       if (dateHeader) {
         lastDateHeader = dateHeader;
-        recordClockSample(currentUrl, dateHeader, fetchStartedAt, Date.now());
+        if (!MONITOR) recordClockSample(currentUrl, dateHeader, fetchStartedAt, Date.now());
       }
       this.jar.store(currentUrl, response.headers.getSetCookie?.() ?? []);
 
-      if ([301, 302, 303, 307, 308].includes(response.status) && hop < maxRedirects) {
+      if ([301, 302, 303, 307, 308].includes(response.status) && hop < maxRedirects && endpoint !== stopAtRedirectFrom) {
         const location = response.headers.get('location');
         if (!location) return { response, url: currentUrl, dateHeader: lastDateHeader };
         currentUrl = new URL(location, currentUrl).toString();
@@ -274,7 +331,13 @@ class Http {
     });
     let json = null;
     try { json = await response.json(); } catch { /* 非 JSON 响应按 null 处理 */ }
-    return { status: response.status, ok: response.ok, body: json, retryAfterMs: retryAfterMs(response.headers) };
+    return {
+      status: response.status,
+      ok: response.ok,
+      body: json,
+      headers: response.headers,
+      retryAfterMs: retryAfterMs(response.headers),
+    };
   }
 }
 
@@ -300,7 +363,7 @@ function medianClockOffset() {
 
 /* ================= 登录：medusa-login.php → /store/oauth → authorize.php → callback ================= */
 
-// deadlineTs 前持续重试（网络类错误）；账号密码错误会在 loginOnce 里立即终止。
+// deadlineTs 前对临时故障退避重试；访问被拒绝时立即终止。
 async function login(http, deadlineTs = Date.now() + 90_000) {
   let attempt = 0;
   let waitMs = 3000;
@@ -309,12 +372,35 @@ async function login(http, deadlineTs = Date.now() + 90_000) {
       return await loginOnce(http);
     } catch (error) {
       attempt += 1;
-      if (Date.now() > deadlineTs) die(`登录持续失败（共 ${attempt} 次，最后错误：${error.message}）`);
+      if (Date.now() > deadlineTs) {
+        await stopOrder(
+          `登录持续失败（共 ${attempt} 次，最后错误：${error.message}）`,
+          '登录重试结束，未能建立会话。请查看脚本日志。',
+        );
+      }
       log(`登录第 ${attempt} 次尝试失败（${error.message}），${waitMs / 1000}s 后重试`);
       await sleep(waitMs);
       waitMs = Math.min(waitMs * 2, 15000);
     }
   }
+}
+
+async function loginResponseDetail(url, status, headers) {
+  const { origin, pathname } = new URL(url);
+  const detail = `${origin}${pathname}（HTTP ${status}）`;
+  if (headers.get('cf-mitigated') === 'challenge') {
+    await stopOrder(
+      `Raksmart 要求完成 Cloudflare 浏览器验证：${detail}。请在浏览器打开 Raksmart 官方网站登录。`,
+      `登录被 Cloudflare 浏览器验证拦截（${detail}），下单流程停止。`,
+    );
+  }
+  if (status === 403) {
+    await stopOrder(
+      `Raksmart 拒绝了登录请求：${detail}。请在浏览器打开 Raksmart 官方网站检查登录。`,
+      `登录请求被拒绝（${detail}），下单流程停止。`,
+    );
+  }
+  return detail;
 }
 
 async function loginOnce(http) {
@@ -333,27 +419,33 @@ async function loginOnce(http) {
     },
     body: form,
     timeoutMs: 20000,
-    maxRedirects: 0,
   });
+  const firstDetail = await loginResponseDetail(first.url, first.response.status, first.response.headers);
   if (![302, 303].includes(first.response.status)) {
-    // 服务器明确拒绝（如账密错误跳到登录页）：重试无意义，立即终止
-    die(`登录第一跳失败（HTTP ${first.response.status}），请检查账号密码`);
+    await stopOrder(
+      `登录表单未返回预期的重定向：${firstDetail}`,
+      `登录表单未进入 OAuth（${firstDetail}），下单流程停止。`,
+    );
   }
 
-  // 后续 OAuth 链路整体跟随（同源 cookie 已在 jar 中分域保存）。
-  // 高峰期 5xx 常见——抛错交给 login() 指数退避重试，而不是退出。
-  const chain = await http.request(`${API_BASE}/oauth?rt=${encodeURIComponent('https://www.raksmart.com')}`, {
+  // 回调响应写入会话 Cookie，随后由 customers/me 验证登录。
+  // 不带浏览器跳转用的 ?rt=https://www.raksmart.com：Cloudflare 会对查询串含该字符串的请求
+  // 下发浏览器验证（脚本过不去），而 rt 只决定登录完成后的跳转目标，脚本用不到。
+  const chain = await http.request(`${API_BASE}/oauth`, {
     maxRedirects: 5,
     timeoutMs: 25000,
     redirectOrigin: BILLING_ORIGIN,
+    stopAtRedirectFrom: OAUTH_CALLBACK_URL,
   });
+  const chainDetail = await loginResponseDetail(chain.url, chain.response.status, chain.response.headers);
   if (chain.response.status >= 400) {
-    throw new Error(`OAuth 链路失败（最终 HTTP ${chain.response.status}）`);
+    throw new Error(`OAuth 链路失败：${chainDetail}`);
   }
 
   const me = await http.apiJson('/customers/me', { method: 'GET', timeoutMs: 15000 });
+  const meDetail = await loginResponseDetail(`${API_BASE}/customers/me`, me.status, me.headers);
   if (me.status !== 200 || !me.body?.customer) {
-    throw new Error(`登录后校验失败（customers/me HTTP ${me.status}）：${JSON.stringify(me.body)?.slice(0, 200)}`);
+    throw new Error(`登录后未能取得客户资料：${meDetail}`);
   }
   const customer = me.body.customer;
   log(`✓ 登录成功：${customer.email}（${customer.id}）`);
@@ -507,6 +599,13 @@ async function withRetries(label, fn, times = 3, waitMs = 3000) {
   }
 }
 
+function fetchProductTemplate(http) {
+  return http.apiJson(`/products/template/whmcs/${CONFIG.pid}`, {
+    payload: { sample_id: CONFIG.sampleId, activity_id: CONFIG.activityId },
+    timeoutMs: 30000,
+  });
+}
+
 // 商品模板是下单的硬依赖（product_id / group_id / 配置项映射），失败持续重试直到场次结束。
 async function fetchTemplateUntil(http, deadlineTs) {
   let attempt = 0;
@@ -515,17 +614,17 @@ async function fetchTemplateUntil(http, deadlineTs) {
     attempt += 1;
     let result;
     try {
-      result = await http.apiJson(`/products/template/whmcs/${CONFIG.pid}`, {
-        payload: { sample_id: CONFIG.sampleId, activity_id: CONFIG.activityId },
-        timeoutMs: 30000,
-      });
+      result = await fetchProductTemplate(http);
     } catch (error) {
       result = { status: 0, body: null, error: error.message };
     }
     if (result.status === 200 && result.body?.product) return result.body;
     const detail = result.error ?? `HTTP ${result.status} ${JSON.stringify(result.body)?.slice(0, 120)}`;
     if (Date.now() > deadlineTs) {
-      die(`商品模板持续获取失败（共 ${attempt} 次，最后：${detail}）——没有模板无法构造下单参数，终止`);
+      await stopOrder(
+        `商品模板持续获取失败（共 ${attempt} 次，最后：${detail}）——没有模板无法构造下单参数，终止`,
+        '商品模板重试结束，下单流程停止。请查看脚本日志。',
+      );
     }
     log(`获取商品模板第 ${attempt} 次失败（${detail}），${waitMs / 1000}s 后重试`);
     await sleep(waitMs);
@@ -662,6 +761,74 @@ function describeQuote(verdict) {
   return Number.isFinite(verdict.price) ? `$${verdict.price.toFixed(2)}｜${detail}` : detail;
 }
 
+function reportsOutOfStock(...details) {
+  return details.some((detail) => typeof detail === 'string'
+    && /库存不足|售罄|缺货|sold[ _-]+out|out[ _-]+of[ _-]+stock|insufficient[ _-]+stock/i.test(detail));
+}
+
+async function monitorQuotes(http) {
+  let params;
+  let lastLogged;
+  let lastNotified;
+  let nextNotificationAt = 0;
+  let retryMs = 0;
+
+  while (true) {
+    let stage = params ? '报价' : '商品模板';
+    let result;
+    try {
+      if (!params) {
+        result = await fetchProductTemplate(http);
+        if (result.ok && result.body?.product) params = buildOrderParams(result.body);
+      }
+      if (params) {
+        stage = '报价';
+        result = await quote(http, params);
+      }
+    } catch {
+      result = { status: 0 };
+    }
+
+    const { status, body } = result;
+    const challenge = result.headers?.get('cf-mitigated') === 'challenge';
+    const blocked = status === 403 || challenge;
+    const active = body?.activity_validate?.status;
+    const price = parsePrice(body?.priceoverride ?? body?.discounted_price ?? body?.unit_price);
+    const receivedQuote = stage === '报价' && status === 200 && (typeof active === 'boolean' || Number.isFinite(price));
+    const failed = !receivedQuote && (ONCE || blocked || (status >= 400 && status < 500 && status !== 408 && status !== 429));
+    let summary;
+    if (receivedQuote) {
+      const activity = active === true ? '进行中' : active === false ? '未生效' : '未知';
+      const amount = Number.isFinite(price) ? `$${price.toFixed(2)}` : '未提供';
+      const stock = active === false && reportsOutOfStock(body.activity_validate.msg) ? '不足' : '未确认';
+      summary = `活动 ${activity}｜报价 ${amount}｜活动库存 ${stock}`;
+    } else if (blocked) {
+      summary = `${stage}访问被拒绝（${challenge ? 'Cloudflare 浏览器验证' : 'HTTP 403'}）`;
+    } else {
+      const problem = status ? `HTTP ${status}` : '连接失败或超时';
+      summary = status === 200 ? `${stage}响应缺少数据` : `${stage}请求失败（${problem}）`;
+    }
+
+    const text = `Raksmart 商品 ${CONFIG.pid}｜${summary}${failed ? '，监控停止' : ''}`;
+    if (text !== lastLogged) {
+      log(text);
+      lastLogged = text;
+    }
+    if (text !== lastNotified && (failed || Date.now() >= nextNotificationAt)) {
+      if (await notifyTelegram(text)) lastNotified = text;
+      else nextNotificationAt = Date.now() + 300000;
+    }
+    if (failed) {
+      process.exitCode = 1;
+      return;
+    }
+    if (ONCE) return;
+
+    retryMs = receivedQuote ? 0 : Math.min(retryMs * 2 || MONITOR_INTERVAL_MS, 300000);
+    await sleep(Math.max(MONITOR_INTERVAL_MS, retryMs, result.retryAfterMs ?? 0));
+  }
+}
+
 async function placeOrder(http, params, customerId, timeoutMs) {
   return http.apiJson('/custom/cart/add-order', {
     payload: buildOrderBody(params, customerId),
@@ -725,6 +892,17 @@ function formatCountdown(ms) {
 }
 
 async function run() {
+  if (flags.has('test-telegram')) {
+    const message = await sendTelegramMessage('Telegram 通知测试成功。此消息来自 Raksmart 监控脚本。', telegramConfig);
+    log(`✓ Telegram 测试消息已发送（消息 ID ${message.message_id}）`);
+    return;
+  }
+  if (MONITOR) {
+    const frequency = ONCE ? '单次查询' : `每 ${MONITOR_INTERVAL_MS / 1000} 秒查询一次`;
+    log(`启动 Raksmart 报价监控（商品 ${CONFIG.pid}，${frequency}）`);
+    await monitorQuotes(new Http(new CookieJar()));
+    return;
+  }
   if (!CONFIG.email || !CONFIG.password) die('缺少账号：请在 config.json 或环境变量 RAKSMART_EMAIL / RAKSMART_PASSWORD 中配置');
   const maxQuoteAttempts = CONFIG.checkoutQuoteMaxAttempts;
   if (!Number.isSafeInteger(maxQuoteAttempts) || maxQuoteAttempts < 0) {
@@ -802,16 +980,23 @@ async function run() {
   if (now(clockOffset) >= schedule.end) {
     log('⚠ 预热重试耗时过长，窗口已在等待期间结束——未提交任何订单');
     writeState({ key, done: false, attempts: 0, reason: 'window-passed-during-preflight', finishedAt: new Date().toISOString() });
+    if (!DRY_RUN) notifyOrder('场次在预热期间结束，尚未发送加购请求。');
     return;
   }
-  log('🚀 进入抢购窗口，开始提交订单');
+  if (DRY_RUN) {
+    log('进入报价校验窗口');
+  } else {
+    log('🚀 进入抢购窗口，开始提交订单');
+    notifyOrder('下单窗口开始，正在尝试加购。');
+  }
 
   const windowEnd = schedule.end;
   const PARALLEL = Math.max(1, Math.min(5, Math.floor(Number(CONFIG.parallel) || 1)));
   const configuredInterval = Number(CONFIG.orderIntervalMs);
   let orderIntervalMs = Number.isFinite(configuredInterval) && configuredInterval > 0
     ? configuredInterval : DEFAULTS.orderIntervalMs;
-  const counter = { attempt: 0, ambiguous: 0, loginRetries: 0, rateLimited: 0 };
+  const counter = { attempt: 0, ambiguous: 0, loginRetries: 0, rateLimited: 0, outOfStock: 0 };
+  let accessDenied = false;
   const orderStop = new AbortController();
   let nextOrderAt = 0;
   let cooldownUntil = 0;
@@ -868,6 +1053,7 @@ async function run() {
         if (!success) {
           success = body;
           log(`✓ add-order 成功（cart ${body.cart.id}，第 ${attemptNo} 次尝试）`);
+          notifyOrder(`第 ${attemptNo} 次加购成功，正在准备结账。`);
         } else {
           log(`⚠ 第 ${attemptNo} 次尝试也成功（cart ${body.cart.id}），仅结账第一个，多余购物车请到订购页清理`);
         }
@@ -883,17 +1069,28 @@ async function run() {
         orderIntervalMs = Math.max(orderIntervalMs, 10000);
         const waitSeconds = Math.ceil((cooldownUntil - limitedAt) / 1000);
         log(`#${attemptNo} 加购限流（HTTP ${status}），暂停所有加购 ${waitSeconds} 秒，冷却后以单路重试`);
+        if (counter.rateLimited === 1) notifyOrder(`加购触发限流，暂停 ${waitSeconds} 秒后恢复尝试。`);
         continue;
       }
       if (status === 401) {
         counter.loginRetries += 1;
-        if (counter.loginRetries > 3) die('会话反复失效，停止（请检查账号是否在其他设备登录被踢）');
+        if (counter.loginRetries > 3) {
+          orderStop.abort();
+          await stopOrder('会话反复失效，停止（请检查账号是否在其他设备登录被踢）', '会话反复失效，下单流程停止。');
+        }
         log(`#${attemptNo} 会话失效，重新登录（第 ${counter.loginRetries} 次）`);
         await login(http, Date.now() + 60_000);
         continue;
       }
+      if (status === 403) {
+        accessDenied = true;
+        orderStop.abort();
+        return;
+      }
       const message = body?.message || body?.msg || body?.error || JSON.stringify(body)?.slice(0, 120);
-      if (status === 400 && /库存不足|售罄|sold out|out of stock/i.test(String(message))) {
+      if (status === 400 && reportsOutOfStock(message, body?.code, body?.error_code)) {
+        counter.outOfStock += 1;
+        if (!success && counter.outOfStock === 1) notifyOrder('服务端返回库存不足，场次内会继续尝试。');
         if (attemptNo <= 3 || attemptNo % 10 === 1) log(`#${attemptNo} 库存不足，继续重试`);
       } else if (status === 400 && /活动|activity/i.test(String(message))) {
         if (attemptNo % 20 === 1) log(`#${attemptNo} 活动未放量：${message}`);
@@ -901,7 +1098,10 @@ async function run() {
         log(`#${attemptNo} HTTP ${status}：${message}`);
         if (status === 400 && /configoption|customfield|invalid_data/i.test(String(body?.code))) {
           orderStop.abort();
-          die('下单参数被服务端拒绝（配置项错误），终止。请核对 configOptions 配置');
+          await stopOrder(
+            '下单参数被服务端拒绝（配置项错误），终止。请核对 configOptions 配置',
+            '加购被拒绝，请核对商品配置项。',
+          );
         }
       }
       await waitForOrder(orderIntervalMs);
@@ -911,17 +1111,20 @@ async function run() {
   await Promise.all(Array.from({ length: PARALLEL }, (_, i) => purchaseWorker(i)));
 
   if (!success) {
-    const { attempt, ambiguous } = counter;
+    const { attempt, ambiguous, outOfStock, rateLimited } = counter;
     if (DRY_RUN) {
       log('窗口结束（--dry-run 模式，未提交任何订单）');
-    } else if (ambiguous > 0) {
-      log(`⚠ 窗口结束且存在 ${ambiguous} 个结果不明的请求，请人工确认是否已生成订单：${BILLING_ORIGIN}/whmcs/clientarea.php`);
-    } else if (counter.rateLimited > 0) {
-      log(`✗ 窗口结束，未能加购（期间收到 ${counter.rateLimited} 次限流响应）`);
     } else {
-      log('✗ 窗口结束，未能抢到（库存不足）');
+      const reason = accessDenied ? '加购访问被拒绝（HTTP 403），流程停止' : '下单窗口结束';
+      let summary = `${reason}，${attempt} 次尝试中未确认加购成功。`;
+      if (outOfStock > 0) summary += ` 库存不足 ${outOfStock} 次。`;
+      if (rateLimited > 0) summary += ` 限流 ${rateLimited} 次。`;
+      if (ambiguous > 0) summary += ` ${ambiguous} 次请求结果待确认，请检查客户中心。\n${CLIENT_AREA_URL}`;
+      log(summary);
+      notifyOrder(summary);
     }
     writeState({ key, done: false, attempts: attempt, finishedAt: new Date().toISOString() });
+    if (accessDenied) process.exitCode = 1;
     return;
   }
 
@@ -947,6 +1150,7 @@ async function run() {
       key, done: 'cart', cartId, reason: 'checkout-quote-unverified',
       quoteError: checkoutQuote.reason, doneAt: new Date().toISOString(),
     });
+    notifyOrder(`已加购，报价或优惠券待核对。\n${BILLING_ORIGIN}/ec/cart?lang=cn`);
     return;
   }
   const { discountIds } = checkoutQuote;
@@ -956,6 +1160,8 @@ async function run() {
   // 「is processing」也说明首次请求在途。因此超时/处理中/5xx 都轮询重试，业务性错误才停止。
   let checkout = null;
   let lastCheckoutError = '';
+  let ambiguousCheckout = false;
+  let rejectedCheckoutStatus;
   for (let attempt = 1; attempt <= 8 && !checkout; attempt += 1) {
     let result;
     try {
@@ -972,42 +1178,50 @@ async function run() {
       ?? JSON.stringify(result.body)?.slice(0, 150)
       ?? `HTTP ${result.status}`;
     const processing = /is processing/i.test(lastCheckoutError);
-    const transient = processing || result.status === 0 || result.status >= 500;
-    if (!transient) break; // 明确的业务拒绝（如折扣无效），重试无意义
+    const transient = processing || result.status === 0 || result.status === 408 || result.status >= 500;
+    if (!transient) {
+      rejectedCheckoutStatus = result.status;
+      break;
+    }
+    ambiguousCheckout = true;
     log(`结账第 ${attempt} 次未确认（${lastCheckoutError}）——服务端可能仍在处理，${processing ? 5 : 8}s 后重查`);
     await sleep(processing ? 5000 : 8000);
   }
 
   if (!checkout) {
+    if (!ambiguousCheckout && rejectedCheckoutStatus) {
+      log(`⚠ 结账被拒绝（HTTP ${rejectedCheckoutStatus}），已保留购物车`);
+      writeState({ key, done: 'cart', cartId, checkoutStatus: rejectedCheckoutStatus, doneAt: new Date().toISOString() });
+      notifyOrder(`结账被拒绝（HTTP ${rejectedCheckoutStatus}），请查看购物车。\n${BILLING_ORIGIN}/ec/cart?lang=cn`);
+      return;
+    }
     // 多次结账未确认：订单可能已在服务端生成（超时请求被受理的实测案例），
     // 不能自动重跑（会重复下单），交给人工核对。
     log(`⚠ 结账多次未确认（最后：${lastCheckoutError}）。超时的请求可能已生成订单，请立即核对：`);
-    log(`  订单列表：${BILLING_ORIGIN}/whmcs/clientarea.php｜购物车：${BILLING_ORIGIN}/ec/cart?lang=cn`);
+    log(`  订单列表：${CLIENT_AREA_URL}｜购物车：${BILLING_ORIGIN}/ec/cart?lang=cn`);
     writeState({ key, done: 'cart-unconfirmed', cartId, lastCheckoutError, doneAt: new Date().toISOString() });
+    notifyOrder(`结账结果待确认，请在客户中心查看订单。\n${CLIENT_AREA_URL}`);
     return;
   }
 
-  if (checkout.status === 200 || checkout.status === 202) {
-    const url = paymentUrlFromBody(checkout.body);
-    const orderId = checkout.body?.whmcs_order?.data?.orderid;
-    const invoiceId = checkout.body?.invoice_id ?? checkout.body?.whmcs_order?.data?.invoiceid;
-    log(`🎉 下单成功！订单 ${orderId ?? '—'}｜账单 ${invoiceId ?? '—'}`);
-    if (url) log(`付款页：${url}`);
-    else log(`请在账单列表查看：${BILLING_ORIGIN}/whmcs/clientarea.php`);
-    log('付款前请核对账单金额与活动价一致');
-    writeState({
-      key, done: true, cartId, orderId, invoiceId, invoiceUrl: url,
-      discountIds,
-      doneAt: new Date().toISOString(),
-    });
-  } else {
-    log(`⚠ 结账返回 HTTP ${checkout.status}：${JSON.stringify(checkout.body)?.slice(0, 300)}`);
-    log(`cart 已创建（${cartId}），可打开购物车手动完成结账：${BILLING_ORIGIN}/ec/cart?lang=cn`);
-    writeState({ key, done: 'cart', cartId, checkoutStatus: checkout.status, doneAt: new Date().toISOString() });
-  }
+  const url = paymentUrlFromBody(checkout.body);
+  const orderId = checkout.body?.whmcs_order?.data?.orderid;
+  const invoiceId = checkout.body?.invoice_id ?? checkout.body?.whmcs_order?.data?.invoiceid;
+  let status = checkout.status === 202 ? '结账已受理，订单状态待确认' : '结账结果待确认（HTTP 200）';
+  if (checkout.status === 200 && (orderId || invoiceId || url)) status = '下单成功';
+  const details = `${status}｜订单 ${orderId ?? '—'}｜账单 ${invoiceId ?? '—'}`;
+  log(details);
+  if (url) log(`付款页：${url}`);
+  else log(`请在账单列表查看：${CLIENT_AREA_URL}`);
+  log('付款前请核对账单金额与活动价一致');
+  writeState({
+    key, done: true, cartId, orderId, invoiceId, invoiceUrl: url,
+    discountIds, doneAt: new Date().toISOString(),
+  });
+  notifyOrder(`${details}。请在客户中心核对账单。\n${CLIENT_AREA_URL}`);
 }
 
 run().catch((error) => {
   console.error(error);
-  exit(1);
-});
+  process.exitCode = 1;
+}).finally(() => orderNotifications);
